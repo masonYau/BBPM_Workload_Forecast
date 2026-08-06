@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+
+# Local editor and Office temp files
+.vscode/
+~$*.xlsx
