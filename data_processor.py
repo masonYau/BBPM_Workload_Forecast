@@ -62,6 +62,7 @@ class DataProcessor:
         master_df = pd.read_excel(tracker_path, sheet_name="Master File", skiprows=1)
         master_df[mh.CIN] = master_df[mh.CIN].astype(str).apply(lambda x: x.lstrip('0'))
         master_df[mh.OriginalT0] = pd.to_datetime(master_df[mh.OriginalT0])
+        master_df[mh.ReviewType] = master_df[mh.ReviewType].apply(lambda x: "PR" if "PR" in x else "Trigger")
         self.master_df = master_df
 
 
