@@ -5,6 +5,7 @@ from headers import RamHeader as rh
 import logging
 import numpy as np
 import math
+import os
 
 class DataProcessor:
 
@@ -30,7 +31,11 @@ class DataProcessor:
         self.frequency = frequency
         self.frequency_days = {"D": 1, "W": 7, "M": 30}
         self.completion_distribution = pd.Series()
+        self.input_bow_volume = pd.Series()
         self.bow_volume = pd.Series()
+        self.received_volume = pd.Series()
+        self.remaining_bow_volume = pd.DataFrame()
+        self.actual_cutoff_date = pd.NaT
 
         self.input_completion_percentage_config = {
             "file_path": "Input_Completion_Percentage.xlsx",
@@ -50,7 +55,11 @@ class DataProcessor:
 
     def read_data(self):
 
-        master_df = pd.read_excel("BBPM Case tracker.xlsm", sheet_name="Master File", skiprows=1)
+        tracker_path = "BBPM Case tracker.xlsm"
+        if not os.path.exists(tracker_path) and os.path.exists("data/BBPM Case tracker.xlsm"):
+            tracker_path = "data/BBPM Case tracker.xlsm"
+
+        master_df = pd.read_excel(tracker_path, sheet_name="Master File", skiprows=1)
         master_df[mh.CIN] = master_df[mh.CIN].astype(str).apply(lambda x: x.lstrip('0'))
         master_df[mh.OriginalT0] = pd.to_datetime(master_df[mh.OriginalT0])
         self.master_df = master_df
@@ -134,6 +143,10 @@ class DataProcessor:
         input_df = input_df.dropna()
 
         bow_volume = input_df.groupby(config["period_column"])[config["volume_column"]].sum()
+        bow_volume.index = pd.to_datetime(bow_volume.index).to_period(config["frequency"])
+        bow_volume.index.name = "Input Period"
+        bow_volume.name = "Input BoW Volume"
+        self.input_bow_volume = bow_volume
         self.bow_volume = self.convert_bow_volume_frequency(
             bow_volume,
             input_frequency=config["frequency"]
@@ -144,7 +157,8 @@ class DataProcessor:
         output_volume = {}
 
         for input_period, volume in bow_volume.sort_index().items():
-            input_period = pd.to_datetime(input_period).to_period(input_frequency)
+            if not isinstance(input_period, pd.Period):
+                input_period = pd.to_datetime(input_period).to_period(input_frequency)
             input_start_date = input_period.start_time.normalize()
             input_end_date = (input_period + 1).start_time.normalize()
             input_days = (input_end_date - input_start_date).days
@@ -167,6 +181,124 @@ class DataProcessor:
         output_volume.name = "BoW Volume"
         return output_volume
 
+    def infer_actual_cutoff_date(self):
+        current_date = pd.to_datetime(self.current_date).normalize()
+        if mh.OriginalT0 not in self.master_df.columns:
+            self.actual_cutoff_date = current_date
+            return self.actual_cutoff_date
+
+        original_t0 = pd.to_datetime(self.master_df[mh.OriginalT0], errors="coerce").dropna()
+
+        if original_t0.empty:
+            self.actual_cutoff_date = current_date
+        else:
+            self.actual_cutoff_date = min(original_t0.max().normalize(), current_date)
+
+        return self.actual_cutoff_date
+
+    def calculate_received_volume(self, cutoff_date=None):
+        if cutoff_date is None:
+            cutoff_date = self.infer_actual_cutoff_date()
+
+        if mh.OriginalT0 not in self.master_df.columns:
+            self.received_volume = pd.Series(
+                dtype=int,
+                index=pd.PeriodIndex([], freq=self.frequency, name="Period")
+            )
+            self.received_volume.name = "Received Volume"
+            return self.received_volume
+
+        received_df = self.master_df[[mh.OriginalT0]].copy()
+        received_df[mh.OriginalT0] = pd.to_datetime(
+            received_df[mh.OriginalT0],
+            errors="coerce"
+        ).dt.normalize()
+        received_df = received_df.dropna(subset=[mh.OriginalT0])
+        received_df = received_df[received_df[mh.OriginalT0] <= cutoff_date]
+        received_df["Period"] = received_df[mh.OriginalT0].dt.to_period(self.frequency)
+
+        if received_df.empty:
+            self.received_volume = pd.Series(
+                dtype=int,
+                index=pd.PeriodIndex([], freq=self.frequency, name="Period")
+            )
+        else:
+            self.received_volume = received_df.groupby("Period").size()
+        self.received_volume.index.name = "Period"
+        self.received_volume.name = "Received Volume"
+        return self.received_volume
+
+    def calculate_remaining_bow_volume(self):
+        if self.input_bow_volume.empty:
+            self.read_input_bow_volume()
+
+        actual_cutoff_date = self.infer_actual_cutoff_date()
+        self.calculate_received_volume(cutoff_date=actual_cutoff_date)
+
+        input_frequency = self.input_bow_volume_config["frequency"]
+        if mh.OriginalT0 in self.master_df.columns:
+            received_df = self.master_df[[mh.OriginalT0]].copy()
+            received_df[mh.OriginalT0] = pd.to_datetime(received_df[mh.OriginalT0], errors="coerce").dt.normalize()
+            received_df = received_df.dropna(subset=[mh.OriginalT0])
+            received_df = received_df[received_df[mh.OriginalT0] <= actual_cutoff_date]
+            received_df["Input Period"] = received_df[mh.OriginalT0].dt.to_period(input_frequency)
+            received_by_input_period = received_df.groupby("Input Period").size()
+        else:
+            received_by_input_period = pd.Series(dtype=int)
+
+        remaining_output_volume = {}
+        remaining_start_limit = actual_cutoff_date + pd.Timedelta(days=1)
+
+        for input_period, planned_volume in self.input_bow_volume.sort_index().items():
+            input_start_date = input_period.start_time.normalize()
+            input_end_date = (input_period + 1).start_time.normalize()
+            received_volume = received_by_input_period.get(input_period, 0)
+            remaining_volume = max(planned_volume - received_volume, 0)
+            remaining_start_date = max(input_start_date, remaining_start_limit)
+
+            if remaining_volume <= 0 or remaining_start_date >= input_end_date:
+                continue
+
+            remaining_days = (input_end_date - remaining_start_date).days
+            first_output_period = remaining_start_date.to_period(self.frequency)
+            last_output_period = (input_end_date - pd.Timedelta(days=1)).to_period(self.frequency)
+
+            for output_period in pd.period_range(first_output_period, last_output_period, freq=self.frequency):
+                output_start_date = output_period.start_time.normalize()
+                output_end_date = (output_period + 1).start_time.normalize()
+                overlap_days = (
+                    min(input_end_date, output_end_date) - max(remaining_start_date, output_start_date)
+                ).days
+
+                if overlap_days > 0:
+                    remaining_output_volume[output_period] = (
+                        remaining_output_volume.get(output_period, 0)
+                        + remaining_volume * overlap_days / remaining_days
+                    )
+
+        if remaining_output_volume:
+            remaining_output_volume = pd.Series(remaining_output_volume, dtype=float).sort_index()
+        else:
+            remaining_output_volume = pd.Series(
+                dtype=float,
+                index=pd.PeriodIndex([], freq=self.frequency, name="Period")
+            )
+        remaining_output_volume.index.name = "Period"
+        remaining_output_volume.name = "Remaining BoW Volume"
+
+        periods = self.bow_volume.index.union(remaining_output_volume.index).sort_values()
+        remaining_df = pd.DataFrame(index=periods)
+        remaining_df.index.name = "Period"
+        remaining_df["Input BoW Volume"] = self.bow_volume.reindex(periods, fill_value=0)
+        remaining_df["Received Volume"] = self.received_volume.reindex(periods, fill_value=0)
+        remaining_df["Remaining BoW Volume"] = remaining_output_volume.reindex(periods, fill_value=0)
+        remaining_df["Over Received Volume"] = (
+            remaining_df["Received Volume"] - remaining_df["Input BoW Volume"]
+        ).clip(lower=0)
+
+        self.remaining_bow_volume = remaining_df
+        return self.remaining_bow_volume
+
 
     def calculate_workload(self):
         return
@@ -176,7 +308,8 @@ class DataProcessor:
 from datetime import datetime
 current_time = pd.to_datetime(datetime.now())
 self = DataProcessor(current_time, "W")
-# self.read_data()
-# self.calculate_completion_distribution()
+self.read_data()
+self.calculate_completion_distribution()
 self.read_input_completion_percentage()
 self.read_input_bow_volume()
+self.calculate_remaining_bow_volume()
