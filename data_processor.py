@@ -30,12 +30,21 @@ class DataProcessor:
         self.frequency = frequency
         self.frequency_days = {"D": 1, "W": 7, "M": 30}
         self.completion_distribution = pd.Series()
+        self.bow_volume = pd.Series()
 
         self.input_completion_percentage_config = {
             "file_path": "Input_Completion_Percentage.xlsx",
             "sheet_name": "Sheet1",
             "period_column": "Month",
             "percentage_column": "Percentage",
+            "frequency": "M",
+        }
+
+        self.input_bow_volume_config = {
+            "file_path": "Input_BoW_Volume.xlsx",
+            "sheet_name": "Sheet1",
+            "period_column": "Month",
+            "volume_column": "Volume",
             "frequency": "M",
         }
 
@@ -116,6 +125,48 @@ class DataProcessor:
         output_distribution.index.name = "N Period"
         return output_distribution
 
+    def read_input_bow_volume(self):
+        config = self.input_bow_volume_config
+        input_df = pd.read_excel(config["file_path"], sheet_name=config["sheet_name"])
+        input_df = input_df[[config["period_column"], config["volume_column"]]].dropna()
+        input_df[config["period_column"]] = pd.to_datetime(input_df[config["period_column"]], errors="coerce")
+        input_df[config["volume_column"]] = pd.to_numeric(input_df[config["volume_column"]], errors="coerce")
+        input_df = input_df.dropna()
+
+        bow_volume = input_df.groupby(config["period_column"])[config["volume_column"]].sum()
+        self.bow_volume = self.convert_bow_volume_frequency(
+            bow_volume,
+            input_frequency=config["frequency"]
+        )
+        return self.bow_volume
+
+    def convert_bow_volume_frequency(self, bow_volume: pd.Series, input_frequency: str):
+        output_volume = {}
+
+        for input_period, volume in bow_volume.sort_index().items():
+            input_period = pd.to_datetime(input_period).to_period(input_frequency)
+            input_start_date = input_period.start_time.normalize()
+            input_end_date = (input_period + 1).start_time.normalize()
+            input_days = (input_end_date - input_start_date).days
+
+            first_output_period = input_start_date.to_period(self.frequency)
+            last_output_period = (input_end_date - pd.Timedelta(days=1)).to_period(self.frequency)
+
+            for output_period in pd.period_range(first_output_period, last_output_period, freq=self.frequency):
+                output_start_date = output_period.start_time.normalize()
+                output_end_date = (output_period + 1).start_time.normalize()
+                overlap_days = (
+                    min(input_end_date, output_end_date) - max(input_start_date, output_start_date)
+                ).days
+
+                if overlap_days > 0:
+                    output_volume[output_period] = output_volume.get(output_period, 0) + volume * overlap_days / input_days
+
+        output_volume = pd.Series(output_volume).sort_index()
+        output_volume.index.name = "Period"
+        output_volume.name = "BoW Volume"
+        return output_volume
+
 
     def calculate_workload(self):
         return
@@ -128,3 +179,4 @@ self = DataProcessor(current_time, "W")
 # self.read_data()
 # self.calculate_completion_distribution()
 self.read_input_completion_percentage()
+self.read_input_bow_volume()
