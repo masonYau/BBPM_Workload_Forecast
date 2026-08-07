@@ -38,13 +38,19 @@ class DataProcessor:
         self.open_received_start_volume = pd.Series()
         self.forecast_completion_volume = pd.Series()
         self.actual_completion_volume = pd.Series()
+        self.forecast_wbh_letter_volume = pd.Series()
         self.completion_volume = pd.DataFrame()
+        self.wbh_letter_volume = pd.DataFrame()
         self.remaining_bow_volume = pd.DataFrame()
         self.actual_cutoff_date = pd.NaT
         self.remaining_bow_cutoff_date = pd.NaT
         self.actual_start_status = {'Completed', 'WBH', 'Cancelled', 'WIP'}
         self.open_start_status = {'WBH', 'WIP', 'Not Initiated'}
         self.actual_completion_status = {'Completed'}
+        self.wbh_letter_days = {
+            "PR": 90,
+            "Trigger": 60,
+        }
 
         self.input_completion_percentage_config = {
             "file_path": "Input_Completion_Percentage.xlsx",
@@ -228,8 +234,19 @@ class DataProcessor:
         output_volume.name = "BoW Volume"
         return output_volume
 
+    def resolve_input_file_path(self, file_path):
+        if os.path.exists(file_path):
+            return file_path
+
+        data_file_path = os.path.join("data", file_path)
+        if os.path.exists(data_file_path):
+            return data_file_path
+
+        return file_path
+
     def read_case_type_input_sheets(self, config):
-        excel_file = pd.ExcelFile(config["file_path"])
+        file_path = self.resolve_input_file_path(config["file_path"])
+        excel_file = pd.ExcelFile(file_path)
         sheet_names = config.get("sheet_names")
         if sheet_names is None:
             sheet_names = excel_file.sheet_names
@@ -237,7 +254,7 @@ class DataProcessor:
             sheet_names = [sheet_names]
 
         for sheet_name in sheet_names:
-            input_df = pd.read_excel(config["file_path"], sheet_name=sheet_name)
+            input_df = pd.read_excel(file_path, sheet_name=sheet_name)
             required_columns = {config["period_column"]}
             if "percentage_column" in config:
                 required_columns.add(config["percentage_column"])
@@ -429,6 +446,121 @@ class DataProcessor:
         completion_distribution.index = completion_distribution.index.astype(int)
         return completion_distribution
 
+    def get_wbh_letter_days(self, case_type):
+        normalized_case_type = "PR" if "PR" in str(case_type).upper() else "Trigger"
+        return self.wbh_letter_days.get(normalized_case_type)
+
+    def calculate_uncompleted_probability(self, case_type, elapsed_periods):
+        completion_distribution = self.get_case_completion_distribution(case_type)
+        if completion_distribution.empty:
+            return None
+
+        completed_probability = completion_distribution[completion_distribution.index < elapsed_periods].sum()
+        return max(1 - completed_probability, 0)
+
+    def add_wbh_letter_volume(self, wbh_letter_volume, case_type, start_period, start_volume, source,
+                              condition_on_cutoff=False, cutoff_date=None):
+        if start_volume <= 0:
+            return
+
+        letter_days = self.get_wbh_letter_days(case_type)
+        if letter_days is None:
+            return
+
+        letter_date = start_period.start_time.normalize() + pd.Timedelta(days=letter_days)
+        letter_period = letter_date.to_period(self.frequency)
+        letter_elapsed_periods = max(letter_period.ordinal - start_period.ordinal, 0)
+        letter_probability = self.calculate_uncompleted_probability(case_type, letter_elapsed_periods)
+        if letter_probability is None or letter_probability <= 0:
+            return
+
+        output_period = letter_period
+        if condition_on_cutoff and cutoff_date is not None:
+            cutoff_period = pd.to_datetime(cutoff_date).to_period(self.frequency)
+            cutoff_elapsed_periods = max(cutoff_period.ordinal - start_period.ordinal, 0)
+
+            if letter_elapsed_periods <= cutoff_elapsed_periods:
+                letter_probability = 1
+                output_period = max(letter_period, cutoff_period)
+            else:
+                cutoff_survival_probability = self.calculate_uncompleted_probability(
+                    case_type,
+                    cutoff_elapsed_periods
+                )
+                if cutoff_survival_probability is None or cutoff_survival_probability <= 0:
+                    return
+                letter_probability = letter_probability / cutoff_survival_probability
+
+        wbh_letter_volume[(case_type, output_period, source)] = (
+            wbh_letter_volume.get((case_type, output_period, source), 0)
+            + start_volume * letter_probability
+        )
+
+    def calculate_wbh_letter_volume(self, cutoff_date=None):
+        if cutoff_date is None:
+            cutoff_date = self.infer_actual_cutoff_date()
+
+        if self.completion_distribution.empty:
+            self.read_input_completion_percentage()
+
+        if self.remaining_bow_volume.empty:
+            self.calculate_remaining_bow_volume()
+
+        open_received_start_volume = self.calculate_open_received_start_volume(cutoff_date=cutoff_date)
+        wbh_letter_volume = {}
+
+        for (case_type, start_period), start_volume in open_received_start_volume.items():
+            self.add_wbh_letter_volume(
+                wbh_letter_volume,
+                case_type,
+                start_period,
+                start_volume,
+                source="Open Received",
+                condition_on_cutoff=True,
+                cutoff_date=cutoff_date
+            )
+
+        if not self.remaining_bow_volume.empty:
+            remaining_start_volume = self.remaining_bow_volume["Remaining BoW Volume"]
+            for (case_type, start_period), start_volume in remaining_start_volume.items():
+                self.add_wbh_letter_volume(
+                    wbh_letter_volume,
+                    case_type,
+                    start_period,
+                    start_volume,
+                    source="Remaining BoW",
+                    condition_on_cutoff=False,
+                    cutoff_date=cutoff_date
+                )
+
+        if wbh_letter_volume:
+            wbh_letter_volume = pd.Series(wbh_letter_volume, dtype=float).sort_index()
+            wbh_letter_volume.index = pd.MultiIndex.from_tuples(
+                wbh_letter_volume.index,
+                names=["Case Type", "Period", "Source"]
+            )
+        else:
+            wbh_letter_volume = pd.Series(
+                dtype=float,
+                index=pd.MultiIndex.from_arrays([[], [], []], names=["Case Type", "Period", "Source"])
+            )
+
+        source_volume = wbh_letter_volume.unstack("Source", fill_value=0)
+        periods = source_volume.index.sort_values()
+        wbh_letter_df = pd.DataFrame(index=periods)
+        wbh_letter_df.index = wbh_letter_df.index.set_names(["Case Type", "Period"])
+        wbh_letter_df["Open Received WBH Letter Volume"] = source_volume.get("Open Received", 0)
+        wbh_letter_df["Remaining BoW WBH Letter Volume"] = source_volume.get("Remaining BoW", 0)
+        wbh_letter_df["Forecast WBH Letter Volume"] = (
+            wbh_letter_df["Open Received WBH Letter Volume"]
+            + wbh_letter_df["Remaining BoW WBH Letter Volume"]
+        )
+
+        self.forecast_wbh_letter_volume = wbh_letter_df["Forecast WBH Letter Volume"]
+        self.forecast_wbh_letter_volume.name = "Forecast WBH Letter Volume"
+        self.wbh_letter_volume = wbh_letter_df
+        return self.wbh_letter_volume
+
     def add_forecast_completion_volume(self, forecast_completion_volume, case_type, start_period, start_volume,
                                        condition_on_cutoff=False, cutoff_date=None):
         completion_distribution = self.get_case_completion_distribution(case_type)
@@ -607,3 +739,4 @@ self.read_input_bow_volume()
 self.calculate_remaining_bow_volume()
 self.calculate_actual_start_volume()
 self.calculate_completion_volume()
+self.calculate_wbh_letter_volume()
