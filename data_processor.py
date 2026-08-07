@@ -43,6 +43,7 @@ class DataProcessor:
         self.completion_volume = pd.DataFrame()
         self.wbh_letter_volume = pd.DataFrame()
         self.wbh_call_volume = pd.DataFrame()
+        self.workload_volume = pd.DataFrame()
         self.remaining_bow_volume = pd.DataFrame()
         self.actual_cutoff_date = pd.NaT
         self.remaining_bow_cutoff_date = pd.NaT
@@ -835,14 +836,82 @@ class DataProcessor:
         return self.remaining_bow_volume
 
 
-    def calculate_workload(self):
-        return
+    def calculate_workload(self, cutoff_date=None):
+        if cutoff_date is None:
+            cutoff_date = self.infer_actual_cutoff_date()
+
+        if self.bow_volume.empty:
+            self.read_input_bow_volume()
+
+        if self.remaining_bow_volume.empty:
+            self.calculate_remaining_bow_volume()
+
+        received_start_volume = self.calculate_received_volume(cutoff_date=cutoff_date)
+        actual_start_volume = self.calculate_actual_start_volume(cutoff_date=cutoff_date)
+        completion_volume = self.calculate_completion_volume(cutoff_date=cutoff_date)
+        wbh_letter_volume = self.calculate_wbh_letter_volume(cutoff_date=cutoff_date)
+        wbh_call_volume = self.calculate_wbh_call_volume(cutoff_date=cutoff_date)
+
+        empty_index = pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Period"])
+
+        def normalize_volume_series(volume_series, name):
+            if volume_series is None or volume_series.empty:
+                return pd.Series(dtype=float, index=empty_index, name=name)
+
+            volume_series = volume_series.copy()
+            volume_series.index = volume_series.index.set_names(["Case Type", "Period"])
+            volume_series = pd.to_numeric(volume_series, errors="coerce").fillna(0).astype(float)
+            volume_series.name = name
+            return volume_series
+
+        remaining_start_volume = pd.Series(dtype=float, index=empty_index)
+        if not self.remaining_bow_volume.empty:
+            remaining_start_volume = self.remaining_bow_volume["Remaining BoW Volume"]
+
+        workload_series = {
+            "Planned Start Volume": normalize_volume_series(self.bow_volume, "Planned Start Volume"),
+            "Received Start Volume": normalize_volume_series(received_start_volume, "Received Start Volume"),
+            "Remaining Planned Start Volume": normalize_volume_series(
+                remaining_start_volume,
+                "Remaining Planned Start Volume"
+            ),
+            "Actual Start Volume": normalize_volume_series(actual_start_volume, "Actual Start Volume"),
+            "Actual Completion Volume": normalize_volume_series(
+                completion_volume.get("Actual Completion Volume") if not completion_volume.empty else None,
+                "Actual Completion Volume"
+            ),
+            "Forecast Completion Volume": normalize_volume_series(
+                completion_volume.get("Forecast Completion Volume") if not completion_volume.empty else None,
+                "Forecast Completion Volume"
+            ),
+            "Forecast WBH Letter Volume": normalize_volume_series(
+                wbh_letter_volume.get("Forecast WBH Letter Volume") if not wbh_letter_volume.empty else None,
+                "Forecast WBH Letter Volume"
+            ),
+            "Forecast WBH Call Volume": normalize_volume_series(
+                wbh_call_volume.get("Forecast WBH Call Volume") if not wbh_call_volume.empty else None,
+                "Forecast WBH Call Volume"
+            ),
+        }
+
+        periods = empty_index
+        for volume_series in workload_series.values():
+            periods = periods.union(volume_series.index)
+        periods = periods.sort_values()
+
+        workload_df = pd.DataFrame(index=periods)
+        workload_df.index = workload_df.index.set_names(["Case Type", "Period"])
+        for column, volume_series in workload_series.items():
+            workload_df[column] = volume_series.reindex(periods, fill_value=0)
+
+        self.workload_volume = workload_df
+        return self.workload_volume
 
 
 
 from datetime import datetime
 current_time = pd.to_datetime(datetime.now())
-self = DataProcessor(current_time, "W")
+self = DataProcessor(current_time, "M")
 self.read_data()
 self.calculate_completion_distribution()
 self.read_input_completion_percentage()
@@ -852,3 +921,4 @@ self.calculate_actual_start_volume()
 self.calculate_completion_volume()
 self.calculate_wbh_letter_volume()
 self.calculate_wbh_call_volume()
+self.calculate_workload()
