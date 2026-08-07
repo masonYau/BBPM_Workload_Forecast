@@ -41,6 +41,7 @@ class DataProcessor:
         self.completion_volume = pd.DataFrame()
         self.remaining_bow_volume = pd.DataFrame()
         self.actual_cutoff_date = pd.NaT
+        self.remaining_bow_cutoff_date = pd.NaT
         self.actual_start_status = {'Completed', 'WBH', 'Cancelled', 'WIP'}
         self.open_start_status = {'WBH', 'WIP'}
         self.actual_completion_status = {'Completed'}
@@ -252,20 +253,27 @@ class DataProcessor:
 
             yield sheet_name, input_df
 
+    def get_current_cutoff_date(self):
+        return pd.to_datetime(self.current_date).normalize()
+
     def infer_actual_cutoff_date(self):
-        current_date = pd.to_datetime(self.current_date).normalize()
+        self.actual_cutoff_date = self.get_current_cutoff_date()
+        return self.actual_cutoff_date
+
+    def infer_remaining_bow_cutoff_date(self):
+        current_date = self.get_current_cutoff_date()
         if mh.OriginalT0 not in self.master_df.columns:
-            self.actual_cutoff_date = current_date
-            return self.actual_cutoff_date
+            self.remaining_bow_cutoff_date = current_date
+            return self.remaining_bow_cutoff_date
 
         original_t0 = pd.to_datetime(self.master_df[mh.OriginalT0], errors="coerce").dropna()
 
         if original_t0.empty:
-            self.actual_cutoff_date = current_date
+            self.remaining_bow_cutoff_date = current_date
         else:
-            self.actual_cutoff_date = min(original_t0.max().normalize(), current_date)
+            self.remaining_bow_cutoff_date = min(original_t0.max().normalize(), current_date)
 
-        return self.actual_cutoff_date
+        return self.remaining_bow_cutoff_date
 
     def calculate_received_volume(self, cutoff_date=None):
         if cutoff_date is None:
@@ -511,8 +519,8 @@ class DataProcessor:
         if self.input_bow_volume.empty:
             self.read_input_bow_volume()
 
-        actual_cutoff_date = self.infer_actual_cutoff_date()
-        self.calculate_received_volume(cutoff_date=actual_cutoff_date)
+        remaining_cutoff_date = self.infer_remaining_bow_cutoff_date()
+        self.calculate_received_volume(cutoff_date=remaining_cutoff_date)
 
         input_frequency = self.input_bow_volume_config["frequency"]
         if mh.OriginalT0 in self.master_df.columns and mh.ReviewType in self.master_df.columns:
@@ -520,7 +528,7 @@ class DataProcessor:
             received_df[mh.ReviewType] = received_df[mh.ReviewType].apply(lambda x: "PR" if "PR" in str(x) else "Trigger")
             received_df[mh.OriginalT0] = pd.to_datetime(received_df[mh.OriginalT0], errors="coerce").dt.normalize()
             received_df = received_df.dropna(subset=[mh.OriginalT0])
-            received_df = received_df[received_df[mh.OriginalT0] <= actual_cutoff_date]
+            received_df = received_df[received_df[mh.OriginalT0] <= remaining_cutoff_date]
             received_df["Input Period"] = received_df[mh.OriginalT0].dt.to_period(input_frequency)
             received_by_input_period = received_df.groupby([mh.ReviewType, "Input Period"]).size()
             received_by_input_period.index = received_by_input_period.index.set_names(["Case Type", "Input Period"])
@@ -528,7 +536,7 @@ class DataProcessor:
             received_by_input_period = pd.Series(dtype=int)
 
         remaining_output_volume = {}
-        remaining_start_limit = actual_cutoff_date + pd.Timedelta(days=1)
+        remaining_start_limit = remaining_cutoff_date + pd.Timedelta(days=1)
 
         for (case_type, input_period), planned_volume in self.input_bow_volume.sort_index().items():
             input_start_date = input_period.start_time.normalize()
