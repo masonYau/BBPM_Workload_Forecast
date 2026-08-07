@@ -467,8 +467,8 @@ class DataProcessor:
         if letter_days is None:
             return
 
-        letter_date = start_period.start_time.normalize() + pd.Timedelta(days=letter_days)
-        letter_period = letter_date.to_period(self.frequency)
+        letter_days_to_period = letter_days // self.frequency_days[self.frequency]
+        letter_period = start_period + letter_days_to_period
         letter_elapsed_periods = max(letter_period.ordinal - start_period.ordinal, 0)
         letter_probability = self.calculate_uncompleted_probability(case_type, letter_elapsed_periods)
         if letter_probability is None or letter_probability <= 0:
@@ -481,7 +481,6 @@ class DataProcessor:
 
             if letter_elapsed_periods <= cutoff_elapsed_periods:
                 letter_probability = 1
-                output_period = max(letter_period, cutoff_period)
             else:
                 cutoff_survival_probability = self.calculate_uncompleted_probability(
                     case_type,
