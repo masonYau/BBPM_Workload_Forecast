@@ -44,6 +44,8 @@ class DataProcessor:
         self.wbh_letter_volume = pd.DataFrame()
         self.wbh_call_volume = pd.DataFrame()
         self.workload_volume = pd.DataFrame()
+        self.output_excel_tables = {}
+        self.output_excel_path = None
         self.remaining_bow_volume = pd.DataFrame()
         self.actual_cutoff_date = pd.NaT
         self.remaining_bow_cutoff_date = pd.NaT
@@ -58,6 +60,89 @@ class DataProcessor:
             "PR": 95,
             "Trigger": 65,
         }
+        self.output_metric_definitions = [
+            {
+                "Category": "Start Pipeline",
+                "Subcategory": "Plan",
+                "Metric": "Planned Start Volume",
+                "Display Name": "计划启动量",
+                "Source": "Input_BoW_Volume.xlsx",
+                "Logic": "Monthly input BoW volume allocated to output periods by calendar-day overlap.",
+                "Cutoff": "N/A",
+            },
+            {
+                "Category": "Start Pipeline",
+                "Subcategory": "Tracker Received",
+                "Metric": "Received Start Volume",
+                "Display Name": "接收启动量",
+                "Source": "BBPM Case tracker.xlsm",
+                "Logic": "All received cases aggregated by Original T0 and output period.",
+                "Cutoff": "Current date",
+            },
+            {
+                "Category": "Start Pipeline",
+                "Subcategory": "Tracker Open",
+                "Metric": "Open Received Start Volume",
+                "Display Name": "Open的接收启动量",
+                "Source": "BBPM Case tracker.xlsm",
+                "Logic": "Received cases still open after excluding completed and cancelled status.",
+                "Cutoff": "Tracker latest Original T0",
+            },
+            {
+                "Category": "Start Pipeline",
+                "Subcategory": "Remaining Plan",
+                "Metric": "Remaining Planned Start Volume",
+                "Display Name": "剩余计划启动量",
+                "Source": "Input_BoW_Volume.xlsx + BBPM Case tracker.xlsm",
+                "Logic": "Input period plan minus received starts, then allocated to output periods after tracker cutoff.",
+                "Cutoff": "Tracker latest Original T0",
+            },
+            {
+                "Category": "Start Pipeline",
+                "Subcategory": "Actual",
+                "Metric": "Actual Start Volume",
+                "Display Name": "实际启动量",
+                "Source": "BBPM Case tracker.xlsm",
+                "Logic": "Cases with status in Completed, WBH, Cancelled, WIP aggregated by Original T0.",
+                "Cutoff": "Current date",
+            },
+            {
+                "Category": "Completion",
+                "Subcategory": "Actual",
+                "Metric": "Actual Completion Volume",
+                "Display Name": "真实完成量",
+                "Source": "BBPM Case tracker.xlsm",
+                "Logic": "Completed cases aggregated by Approval/Cancel Date.",
+                "Cutoff": "Current date",
+            },
+            {
+                "Category": "Completion",
+                "Subcategory": "Forecast",
+                "Metric": "Forecast Completion Volume",
+                "Display Name": "预估完成量",
+                "Source": "Open received starts + remaining planned starts + completion distribution",
+                "Logic": "Open received and remaining planned starts multiplied by case-type completion probability distribution.",
+                "Cutoff": "Mixed: tracker cutoff for open received, current date for actual completion.",
+            },
+            {
+                "Category": "WBH Action",
+                "Subcategory": "Letter",
+                "Metric": "Forecast WBH Letter Volume",
+                "Display Name": "WBH信件量",
+                "Source": "Open received starts + remaining planned starts + completion distribution",
+                "Logic": "Starts still uncompleted at T+90 for PR or T+60 for Trigger.",
+                "Cutoff": "Tracker latest Original T0 for open received.",
+            },
+            {
+                "Category": "WBH Action",
+                "Subcategory": "Call",
+                "Metric": "Forecast WBH Call Volume",
+                "Display Name": "WBH来电量",
+                "Source": "Open received starts + remaining planned starts + completion distribution",
+                "Logic": "Starts still uncompleted at T+95 for PR or T+65 for Trigger.",
+                "Cutoff": "Tracker latest Original T0 for open received.",
+            },
+        ]
 
         self.input_completion_percentage_config = {
             "file_path": "Input_Completion_Percentage.xlsx",
@@ -917,6 +1002,252 @@ class DataProcessor:
         self.workload_volume = workload_df
         return self.workload_volume
 
+    def add_period_display_columns(self, output_df, period_columns=None):
+        if period_columns is None:
+            period_columns = ["Period"]
+
+        output_df = output_df.copy()
+        for period_column in period_columns:
+            if period_column not in output_df.columns:
+                continue
+
+            period_start_column = f"{period_column} Start"
+            period_end_column = f"{period_column} End"
+
+            output_df[period_start_column] = output_df[period_column].apply(
+                lambda period: period.start_time.normalize() if isinstance(period, pd.Period) else pd.NaT
+            )
+            output_df[period_end_column] = output_df[period_column].apply(
+                lambda period: period.end_time.normalize() if isinstance(period, pd.Period) else pd.NaT
+            )
+            output_df[period_column] = output_df[period_column].astype(str)
+
+        return output_df
+
+    def output_table_from_series(self, volume_series, value_name, period_columns=None):
+        if volume_series is None or volume_series.empty:
+            return pd.DataFrame()
+
+        output_df = volume_series.reset_index(name=value_name)
+        return self.add_period_display_columns(output_df, period_columns=period_columns)
+
+    def output_table_from_dataframe(self, volume_df, period_columns=None):
+        if volume_df is None or volume_df.empty:
+            return pd.DataFrame()
+
+        output_df = volume_df.reset_index()
+        return self.add_period_display_columns(output_df, period_columns=period_columns)
+
+    def build_completion_distribution_output_table(self):
+        distribution_df = self.output_table_from_series(
+            self.completion_distribution,
+            "Completion Probability",
+            period_columns=[]
+        )
+        if distribution_df.empty:
+            return distribution_df
+
+        if {"Case Type", "N Period", "Completion Probability"}.issubset(distribution_df.columns):
+            distribution_df = distribution_df.sort_values(["Case Type", "N Period"])
+            distribution_df["Cumulative Completion Probability"] = (
+                distribution_df.groupby("Case Type")["Completion Probability"].cumsum()
+            )
+            distribution_df["Remaining Uncompleted Probability"] = (
+                1 - distribution_df["Cumulative Completion Probability"]
+            ).clip(lower=0)
+
+        return distribution_df
+
+    def write_output_excel(self, output_path=None, output_tables=None):
+        if output_path is None:
+            output_path = os.path.join("data", "Workload_Forecast_Output.xlsx")
+
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        if output_tables is None:
+            output_tables = self.output_excel_tables
+
+        if not output_tables:
+            raise ValueError("No output tables available. Run build_output_excel_tables first.")
+
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+
+        header_fill = PatternFill("solid", fgColor="1F4E78")
+        header_font = Font(color="FFFFFF", bold=True)
+        category_fills = {
+            "Start Pipeline": PatternFill("solid", fgColor="E2F0D9"),
+            "Completion": PatternFill("solid", fgColor="D9EAF7"),
+            "WBH Action": PatternFill("solid", fgColor="FCE4D6"),
+        }
+
+        with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+            for sheet_name, output_df in output_tables.items():
+                safe_sheet_name = sheet_name[:31]
+                if output_df is None or output_df.empty:
+                    output_df = pd.DataFrame({"Message": ["No data"]})
+                else:
+                    output_df = output_df.copy()
+
+                output_df.to_excel(writer, sheet_name=safe_sheet_name, index=False)
+                worksheet = writer.sheets[safe_sheet_name]
+                worksheet.freeze_panes = "A2"
+                worksheet.auto_filter.ref = worksheet.dimensions
+
+                for cell in worksheet[1]:
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+                header_by_column = {
+                    cell.column: str(cell.value)
+                    for cell in worksheet[1]
+                    if cell.value is not None
+                }
+
+                for row in worksheet.iter_rows(min_row=2):
+                    category_value = None
+                    for cell in row:
+                        if header_by_column.get(cell.column) == "Category":
+                            category_value = cell.value
+                            break
+
+                    if category_value in category_fills:
+                        for cell in row:
+                            cell.fill = category_fills[category_value]
+
+                    for cell in row:
+                        header = header_by_column.get(cell.column, "")
+                        if "Probability" in header:
+                            cell.number_format = "0.0%"
+                        elif "Volume" in header or header == "Value":
+                            if isinstance(cell.value, (int, float)):
+                                cell.number_format = "#,##0.0"
+                        elif "Date" in header or header.endswith("Start") or header.endswith("End"):
+                            cell.number_format = "yyyy-mm-dd"
+
+                for column_cells in worksheet.columns:
+                    column_letter = get_column_letter(column_cells[0].column)
+                    max_length = 0
+                    for cell in column_cells:
+                        if cell.value is None:
+                            continue
+                        max_length = max(max_length, len(str(cell.value)))
+
+                    worksheet.column_dimensions[column_letter].width = min(max(max_length + 2, 12), 45)
+
+        self.output_excel_path = output_path
+        return self.output_excel_path
+
+    def build_output_excel_tables(self, cutoff_date=None, output_path=None, write_excel=True):
+        if cutoff_date is None:
+            cutoff_date = self.infer_actual_cutoff_date()
+
+        workload_df = self.calculate_workload(cutoff_date=cutoff_date)
+        metric_definitions = pd.DataFrame(self.output_metric_definitions)
+        metric_lookup = metric_definitions.set_index("Metric").to_dict("index")
+
+        control_df = pd.DataFrame(
+            [
+                {"Item": "Current Date", "Value": self.get_current_cutoff_date()},
+                {"Item": "Actual Cutoff Date", "Value": self.infer_actual_cutoff_date()},
+                {"Item": "Tracker Cutoff Date", "Value": self.infer_remaining_bow_cutoff_date()},
+                {"Item": "Output Frequency", "Value": self.frequency},
+                {"Item": "Completion Input Frequency", "Value": self.input_completion_percentage_config["frequency"]},
+                {"Item": "BoW Input Frequency", "Value": self.input_bow_volume_config["frequency"]},
+                {"Item": "Open Received Status", "Value": ", ".join(sorted(self.open_start_status))},
+                {"Item": "Actual Start Status", "Value": ", ".join(sorted(self.actual_start_status))},
+                {"Item": "Actual Completion Status", "Value": ", ".join(sorted(self.actual_completion_status))},
+                {"Item": "WBH Letter Rule", "Value": "PR T+90, Trigger T+60"},
+                {"Item": "WBH Call Rule", "Value": "PR T+95, Trigger T+65"},
+            ]
+        )
+
+        workload_wide = self.add_period_display_columns(workload_df.reset_index(), period_columns=["Period"])
+        workload_wide = workload_wide.rename(
+            columns={
+                metric: f"{metric_lookup[metric]['Category']} | {metric_lookup[metric]['Display Name']}"
+                for metric in workload_df.columns
+                if metric in metric_lookup
+            }
+        )
+
+        workload_long = workload_df.reset_index().melt(
+            id_vars=["Case Type", "Period"],
+            var_name="Metric",
+            value_name="Volume"
+        )
+        workload_long["Category"] = workload_long["Metric"].map(
+            lambda metric: metric_lookup.get(metric, {}).get("Category", "Other")
+        )
+        workload_long["Subcategory"] = workload_long["Metric"].map(
+            lambda metric: metric_lookup.get(metric, {}).get("Subcategory", "Other")
+        )
+        workload_long["Display Name"] = workload_long["Metric"].map(
+            lambda metric: metric_lookup.get(metric, {}).get("Display Name", metric)
+        )
+        workload_long = self.add_period_display_columns(workload_long, period_columns=["Period"])
+        workload_long = workload_long[
+            [
+                "Case Type",
+                "Period",
+                "Period Start",
+                "Period End",
+                "Category",
+                "Subcategory",
+                "Metric",
+                "Display Name",
+                "Volume",
+            ]
+        ]
+
+        output_tables = {
+            "00_Control": control_df,
+            "01_Workload_Wide": workload_wide,
+            "02_Workload_Long": workload_long,
+            "03_Metric_Definitions": metric_definitions,
+            "10_Input_BoW": self.output_table_from_series(
+                self.input_bow_volume,
+                "Input BoW Volume",
+                period_columns=["Input Period"]
+            ),
+            "11_Planned_Start": self.output_table_from_series(
+                self.bow_volume,
+                "Planned Start Volume",
+                period_columns=["Period"]
+            ),
+            "12_Start_Reconciliation": self.output_table_from_dataframe(
+                self.remaining_bow_volume,
+                period_columns=["Period"]
+            ),
+            "13_Open_Received_Start": self.output_table_from_series(
+                self.open_received_start_volume,
+                "Open Received Start Volume",
+                period_columns=["Start Period"]
+            ),
+            "20_Completion": self.output_table_from_dataframe(
+                self.completion_volume,
+                period_columns=["Period"]
+            ),
+            "21_Completion_Distribution": self.build_completion_distribution_output_table(),
+            "30_WBH_Letter": self.output_table_from_dataframe(
+                self.wbh_letter_volume,
+                period_columns=["Period"]
+            ),
+            "31_WBH_Call": self.output_table_from_dataframe(
+                self.wbh_call_volume,
+                period_columns=["Period"]
+            ),
+        }
+
+        self.output_excel_tables = output_tables
+        if write_excel or output_path is not None:
+            self.write_output_excel(output_path=output_path, output_tables=output_tables)
+
+        return self.output_excel_tables
+
 
 
 from datetime import datetime
@@ -932,3 +1263,4 @@ self.calculate_completion_volume()
 self.calculate_wbh_letter_volume()
 self.calculate_wbh_call_volume()
 self.calculate_workload()
+self.build_output_excel_tables()
