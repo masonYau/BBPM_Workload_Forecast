@@ -43,7 +43,7 @@ class DataProcessor:
         self.actual_cutoff_date = pd.NaT
         self.remaining_bow_cutoff_date = pd.NaT
         self.actual_start_status = {'Completed', 'WBH', 'Cancelled', 'WIP'}
-        self.open_start_status = {'WBH', 'WIP'}
+        self.open_start_status = {'WBH', 'WIP', 'Not Initiated'}
         self.actual_completion_status = {'Completed'}
 
         self.input_completion_percentage_config = {
