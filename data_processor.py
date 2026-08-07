@@ -35,9 +35,15 @@ class DataProcessor:
         self.bow_volume = pd.Series()
         self.received_volume = pd.Series()
         self.actual_start_volume = pd.Series()
+        self.open_received_start_volume = pd.Series()
+        self.forecast_completion_volume = pd.Series()
+        self.actual_completion_volume = pd.Series()
+        self.completion_volume = pd.DataFrame()
         self.remaining_bow_volume = pd.DataFrame()
         self.actual_cutoff_date = pd.NaT
         self.actual_start_status = {'Completed', 'WBH', 'Cancelled', 'WIP'}
+        self.open_start_status = {'WBH', 'WIP'}
+        self.actual_completion_status = {'Completed'}
 
         self.input_completion_percentage_config = {
             "file_path": "Input_Completion_Percentage.xlsx",
@@ -327,6 +333,180 @@ class DataProcessor:
         self.actual_start_volume.name = "Actual Start Volume"
         return self.actual_start_volume
 
+    def calculate_open_received_start_volume(self, cutoff_date=None):
+        if cutoff_date is None:
+            cutoff_date = self.infer_actual_cutoff_date()
+
+        if mh.OriginalT0 not in self.master_df.columns or mh.ReviewType not in self.master_df.columns or mh.TaskStatus not in self.master_df.columns:
+            self.open_received_start_volume = pd.Series(
+                dtype=float,
+                index=pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Start Period"])
+            )
+            self.open_received_start_volume.name = "Open Received Start Volume"
+            return self.open_received_start_volume
+
+        start_df = self.master_df[[mh.OriginalT0, mh.ReviewType, mh.TaskStatus]].copy()
+        start_df[mh.OriginalT0] = pd.to_datetime(start_df[mh.OriginalT0], errors="coerce").dt.normalize()
+        start_df[mh.ReviewType] = start_df[mh.ReviewType].apply(lambda x: "PR" if "PR" in str(x) else "Trigger")
+        start_df["Status"] = start_df[mh.TaskStatus].map(self.wbh_status)
+        start_df = start_df.dropna(subset=[mh.OriginalT0, "Status"])
+        start_df = start_df[start_df[mh.OriginalT0] <= cutoff_date]
+        start_df = start_df[start_df["Status"].isin(self.open_start_status)]
+        start_df["Start Period"] = start_df[mh.OriginalT0].dt.to_period(self.frequency)
+
+        if start_df.empty:
+            self.open_received_start_volume = pd.Series(
+                dtype=float,
+                index=pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Start Period"])
+            )
+        else:
+            self.open_received_start_volume = start_df.groupby([mh.ReviewType, "Start Period"]).size().astype(float)
+            self.open_received_start_volume.index = self.open_received_start_volume.index.set_names(["Case Type", "Start Period"])
+
+        self.open_received_start_volume.name = "Open Received Start Volume"
+        return self.open_received_start_volume
+
+    def calculate_actual_completion_volume(self, cutoff_date=None):
+        if cutoff_date is None:
+            cutoff_date = self.infer_actual_cutoff_date()
+
+        if mh.ApprovalCancelDate not in self.master_df.columns or mh.ReviewType not in self.master_df.columns or mh.TaskStatus not in self.master_df.columns:
+            self.actual_completion_volume = pd.Series(
+                dtype=int,
+                index=pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Period"])
+            )
+            self.actual_completion_volume.name = "Actual Completion Volume"
+            return self.actual_completion_volume
+
+        completion_df = self.master_df[[mh.ApprovalCancelDate, mh.ReviewType, mh.TaskStatus]].copy()
+        completion_df[mh.ApprovalCancelDate] = pd.to_datetime(
+            completion_df[mh.ApprovalCancelDate],
+            errors="coerce"
+        ).dt.normalize()
+        completion_df[mh.ReviewType] = completion_df[mh.ReviewType].apply(lambda x: "PR" if "PR" in str(x) else "Trigger")
+        completion_df["Status"] = completion_df[mh.TaskStatus].map(self.wbh_status)
+        completion_df = completion_df.dropna(subset=[mh.ApprovalCancelDate, "Status"])
+        completion_df = completion_df[completion_df[mh.ApprovalCancelDate] <= cutoff_date]
+        completion_df = completion_df[completion_df["Status"].isin(self.actual_completion_status)]
+        completion_df["Period"] = completion_df[mh.ApprovalCancelDate].dt.to_period(self.frequency)
+
+        if completion_df.empty:
+            self.actual_completion_volume = pd.Series(
+                dtype=int,
+                index=pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Period"])
+            )
+        else:
+            self.actual_completion_volume = completion_df.groupby([mh.ReviewType, "Period"]).size()
+            self.actual_completion_volume.index = self.actual_completion_volume.index.set_names(["Case Type", "Period"])
+
+        self.actual_completion_volume.name = "Actual Completion Volume"
+        return self.actual_completion_volume
+
+    def get_case_completion_distribution(self, case_type):
+        if self.completion_distribution.empty:
+            return pd.Series(dtype=float)
+
+        completion_distribution = self.completion_distribution
+        if isinstance(completion_distribution.index, pd.MultiIndex):
+            if "Case Type" in completion_distribution.index.names:
+                if case_type not in completion_distribution.index.get_level_values("Case Type"):
+                    return pd.Series(dtype=float)
+                completion_distribution = completion_distribution.xs(case_type, level="Case Type")
+            elif "Status" in completion_distribution.index.names:
+                if "Completed" not in completion_distribution.index.get_level_values("Status"):
+                    return pd.Series(dtype=float)
+                completion_distribution = completion_distribution.xs("Completed", level="Status")
+
+        completion_distribution = pd.to_numeric(completion_distribution, errors="coerce").dropna().sort_index()
+        completion_distribution.index = completion_distribution.index.astype(int)
+        return completion_distribution
+
+    def add_forecast_completion_volume(self, forecast_completion_volume, case_type, start_period, start_volume,
+                                       condition_on_cutoff=False, cutoff_date=None):
+        completion_distribution = self.get_case_completion_distribution(case_type)
+        if start_volume <= 0 or completion_distribution.empty:
+            return
+
+        elapsed_periods = 0
+        survival_probability = 1
+        if condition_on_cutoff and cutoff_date is not None:
+            cutoff_period = pd.to_datetime(cutoff_date).to_period(self.frequency)
+            elapsed_periods = max(cutoff_period.ordinal - start_period.ordinal, 0)
+            survival_probability = 1 - completion_distribution[completion_distribution.index < elapsed_periods].sum()
+            if survival_probability <= 0:
+                return
+
+        for n_period, percentage in completion_distribution.items():
+            n_period = int(n_period)
+            if condition_on_cutoff and n_period < elapsed_periods:
+                continue
+
+            completion_period = start_period + n_period
+            adjusted_percentage = percentage / survival_probability if condition_on_cutoff else percentage
+            forecast_completion_volume[(case_type, completion_period)] = (
+                forecast_completion_volume.get((case_type, completion_period), 0)
+                + start_volume * adjusted_percentage
+            )
+
+    def calculate_completion_volume(self, cutoff_date=None):
+        if cutoff_date is None:
+            cutoff_date = self.infer_actual_cutoff_date()
+
+        if self.completion_distribution.empty:
+            self.read_input_completion_percentage()
+
+        if self.remaining_bow_volume.empty:
+            self.calculate_remaining_bow_volume()
+
+        open_received_start_volume = self.calculate_open_received_start_volume(cutoff_date=cutoff_date)
+        forecast_completion_volume = {}
+
+        for (case_type, start_period), start_volume in open_received_start_volume.items():
+            self.add_forecast_completion_volume(
+                forecast_completion_volume,
+                case_type,
+                start_period,
+                start_volume,
+                condition_on_cutoff=True,
+                cutoff_date=cutoff_date
+            )
+
+        if not self.remaining_bow_volume.empty:
+            remaining_start_volume = self.remaining_bow_volume["Remaining BoW Volume"]
+            for (case_type, start_period), start_volume in remaining_start_volume.items():
+                self.add_forecast_completion_volume(
+                    forecast_completion_volume,
+                    case_type,
+                    start_period,
+                    start_volume,
+                    condition_on_cutoff=False,
+                    cutoff_date=cutoff_date
+                )
+
+        if forecast_completion_volume:
+            self.forecast_completion_volume = pd.Series(forecast_completion_volume, dtype=float).sort_index()
+            self.forecast_completion_volume.index = pd.MultiIndex.from_tuples(
+                self.forecast_completion_volume.index,
+                names=["Case Type", "Period"]
+            )
+        else:
+            self.forecast_completion_volume = pd.Series(
+                dtype=float,
+                index=pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Period"])
+            )
+        self.forecast_completion_volume.name = "Forecast Completion Volume"
+
+        self.calculate_actual_completion_volume(cutoff_date=cutoff_date)
+
+        periods = self.forecast_completion_volume.index.union(self.actual_completion_volume.index).sort_values()
+        completion_df = pd.DataFrame(index=periods)
+        completion_df.index = completion_df.index.set_names(["Case Type", "Period"])
+        completion_df["Forecast Completion Volume"] = self.forecast_completion_volume.reindex(periods, fill_value=0)
+        completion_df["Actual Completion Volume"] = self.actual_completion_volume.reindex(periods, fill_value=0)
+
+        self.completion_volume = completion_df
+        return self.completion_volume
+
     def calculate_remaining_bow_volume(self):
         if self.input_bow_volume.empty:
             self.read_input_bow_volume()
@@ -418,3 +598,4 @@ self.read_input_completion_percentage()
 self.read_input_bow_volume()
 self.calculate_remaining_bow_volume()
 self.calculate_actual_start_volume()
+self.calculate_completion_volume()
