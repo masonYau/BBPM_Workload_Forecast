@@ -34,12 +34,14 @@ class DataProcessor:
         self.input_bow_volume = pd.Series()
         self.bow_volume = pd.Series()
         self.received_volume = pd.Series()
+        self.actual_start_volume = pd.Series()
         self.remaining_bow_volume = pd.DataFrame()
         self.actual_cutoff_date = pd.NaT
+        self.actual_start_status = {'Completed', 'WBH', 'Cancelled', 'WIP'}
 
         self.input_completion_percentage_config = {
             "file_path": "Input_Completion_Percentage.xlsx",
-            "sheet_name": "Sheet1",
+            "sheet_names": None,
             "period_column": "Month",
             "percentage_column": "Percentage",
             "frequency": "M",
@@ -47,7 +49,7 @@ class DataProcessor:
 
         self.input_bow_volume_config = {
             "file_path": "Input_BoW_Volume.xlsx",
-            "sheet_name": "Sheet1",
+            "sheet_names": None,
             "period_column": "Month",
             "volume_column": "Volume",
             "frequency": "M",
@@ -92,21 +94,33 @@ class DataProcessor:
 
     def read_input_completion_percentage(self):
         config = self.input_completion_percentage_config
-        input_df = pd.read_excel(config["file_path"], sheet_name=config["sheet_name"])
-        input_df = input_df[[config["period_column"], config["percentage_column"]]].dropna()
-        input_df[config["period_column"]] = pd.to_numeric(input_df[config["period_column"]], errors="coerce")
-        input_df[config["percentage_column"]] = pd.to_numeric(input_df[config["percentage_column"]], errors="coerce")
-        input_df = input_df.dropna()
+        completion_distributions = {}
 
-        completion_distribution = input_df.groupby(config["period_column"])[config["percentage_column"]].sum()
-        completion_distribution.index = completion_distribution.index.astype(int)
-        if len(completion_distribution) > 0 and completion_distribution.max() > 1:
-            completion_distribution = completion_distribution / 100
+        for case_type, input_df in self.read_case_type_input_sheets(config):
+            input_df = input_df[[config["period_column"], config["percentage_column"]]].dropna()
+            input_df[config["period_column"]] = pd.to_numeric(input_df[config["period_column"]], errors="coerce")
+            input_df[config["percentage_column"]] = pd.to_numeric(input_df[config["percentage_column"]], errors="coerce")
+            input_df = input_df.dropna()
 
-        self.completion_distribution = self.convert_completion_distribution_frequency(
-            completion_distribution,
-            input_frequency=config["frequency"]
-        )
+            completion_distribution = input_df.groupby(config["period_column"])[config["percentage_column"]].sum()
+            completion_distribution.index = completion_distribution.index.astype(int)
+            if len(completion_distribution) > 0 and completion_distribution.max() > 1:
+                completion_distribution = completion_distribution / 100
+
+            completion_distribution = self.convert_completion_distribution_frequency(
+                completion_distribution,
+                input_frequency=config["frequency"]
+            )
+
+            for n_period, percentage in completion_distribution.items():
+                completion_distributions[(case_type, n_period)] = percentage
+
+        self.completion_distribution = pd.Series(completion_distributions).sort_index()
+        if not self.completion_distribution.empty:
+            self.completion_distribution.index = pd.MultiIndex.from_tuples(
+                self.completion_distribution.index,
+                names=["Case Type", "N Period"]
+            )
         return self.completion_distribution
 
     def convert_completion_distribution_frequency(self, completion_distribution: pd.Series, input_frequency: str):
@@ -137,21 +151,46 @@ class DataProcessor:
 
     def read_input_bow_volume(self):
         config = self.input_bow_volume_config
-        input_df = pd.read_excel(config["file_path"], sheet_name=config["sheet_name"])
-        input_df = input_df[[config["period_column"], config["volume_column"]]].dropna()
-        input_df[config["period_column"]] = pd.to_datetime(input_df[config["period_column"]], errors="coerce")
-        input_df[config["volume_column"]] = pd.to_numeric(input_df[config["volume_column"]], errors="coerce")
-        input_df = input_df.dropna()
+        input_bow_volume = {}
+        output_bow_volume = {}
 
-        bow_volume = input_df.groupby(config["period_column"])[config["volume_column"]].sum()
-        bow_volume.index = pd.to_datetime(bow_volume.index).to_period(config["frequency"])
-        bow_volume.index.name = "Input Period"
-        bow_volume.name = "Input BoW Volume"
-        self.input_bow_volume = bow_volume
-        self.bow_volume = self.convert_bow_volume_frequency(
-            bow_volume,
-            input_frequency=config["frequency"]
-        )
+        for case_type, input_df in self.read_case_type_input_sheets(config):
+            input_df = input_df[[config["period_column"], config["volume_column"]]].dropna()
+            input_df[config["period_column"]] = pd.to_datetime(input_df[config["period_column"]], errors="coerce")
+            input_df[config["volume_column"]] = pd.to_numeric(input_df[config["volume_column"]], errors="coerce")
+            input_df = input_df.dropna()
+
+            bow_volume = input_df.groupby(config["period_column"])[config["volume_column"]].sum()
+            bow_volume.index = pd.to_datetime(bow_volume.index).to_period(config["frequency"])
+            bow_volume.index.name = "Input Period"
+            bow_volume.name = "Input BoW Volume"
+
+            for input_period, volume in bow_volume.items():
+                input_bow_volume[(case_type, input_period)] = volume
+
+            converted_bow_volume = self.convert_bow_volume_frequency(
+                bow_volume,
+                input_frequency=config["frequency"]
+            )
+
+            for period, volume in converted_bow_volume.items():
+                output_bow_volume[(case_type, period)] = volume
+
+        self.input_bow_volume = pd.Series(input_bow_volume).sort_index()
+        if not self.input_bow_volume.empty:
+            self.input_bow_volume.index = pd.MultiIndex.from_tuples(
+                self.input_bow_volume.index,
+                names=["Case Type", "Input Period"]
+            )
+        self.input_bow_volume.name = "Input BoW Volume"
+
+        self.bow_volume = pd.Series(output_bow_volume).sort_index()
+        if not self.bow_volume.empty:
+            self.bow_volume.index = pd.MultiIndex.from_tuples(
+                self.bow_volume.index,
+                names=["Case Type", "Period"]
+            )
+        self.bow_volume.name = "BoW Volume"
         return self.bow_volume
 
     def convert_bow_volume_frequency(self, bow_volume: pd.Series, input_frequency: str):
@@ -182,6 +221,31 @@ class DataProcessor:
         output_volume.name = "BoW Volume"
         return output_volume
 
+    def read_case_type_input_sheets(self, config):
+        excel_file = pd.ExcelFile(config["file_path"])
+        sheet_names = config.get("sheet_names")
+        if sheet_names is None:
+            sheet_names = excel_file.sheet_names
+        elif isinstance(sheet_names, str):
+            sheet_names = [sheet_names]
+
+        for sheet_name in sheet_names:
+            input_df = pd.read_excel(config["file_path"], sheet_name=sheet_name)
+            required_columns = {config["period_column"]}
+            if "percentage_column" in config:
+                required_columns.add(config["percentage_column"])
+            if "volume_column" in config:
+                required_columns.add(config["volume_column"])
+
+            if not required_columns.issubset(input_df.columns):
+                continue
+
+            input_df = input_df.dropna(how="all")
+            if input_df.empty:
+                continue
+
+            yield sheet_name, input_df
+
     def infer_actual_cutoff_date(self):
         current_date = pd.to_datetime(self.current_date).normalize()
         if mh.OriginalT0 not in self.master_df.columns:
@@ -201,15 +265,16 @@ class DataProcessor:
         if cutoff_date is None:
             cutoff_date = self.infer_actual_cutoff_date()
 
-        if mh.OriginalT0 not in self.master_df.columns:
+        if mh.OriginalT0 not in self.master_df.columns or mh.ReviewType not in self.master_df.columns:
             self.received_volume = pd.Series(
                 dtype=int,
-                index=pd.PeriodIndex([], freq=self.frequency, name="Period")
+                index=pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Period"])
             )
             self.received_volume.name = "Received Volume"
             return self.received_volume
 
-        received_df = self.master_df[[mh.OriginalT0]].copy()
+        received_df = self.master_df[[mh.OriginalT0, mh.ReviewType]].copy()
+        received_df[mh.ReviewType] = received_df[mh.ReviewType].apply(lambda x: "PR" if "PR" in str(x) else "Trigger")
         received_df[mh.OriginalT0] = pd.to_datetime(
             received_df[mh.OriginalT0],
             errors="coerce"
@@ -221,13 +286,46 @@ class DataProcessor:
         if received_df.empty:
             self.received_volume = pd.Series(
                 dtype=int,
-                index=pd.PeriodIndex([], freq=self.frequency, name="Period")
+                index=pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Period"])
             )
         else:
-            self.received_volume = received_df.groupby("Period").size()
-        self.received_volume.index.name = "Period"
+            self.received_volume = received_df.groupby([mh.ReviewType, "Period"]).size()
+            self.received_volume.index = self.received_volume.index.set_names(["Case Type", "Period"])
         self.received_volume.name = "Received Volume"
         return self.received_volume
+
+    def calculate_actual_start_volume(self, cutoff_date=None):
+        if cutoff_date is None:
+            cutoff_date = self.infer_actual_cutoff_date()
+
+        if mh.OriginalT0 not in self.master_df.columns or mh.ReviewType not in self.master_df.columns or mh.TaskStatus not in self.master_df.columns:
+            self.actual_start_volume = pd.Series(
+                dtype=int,
+                index=pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Period"])
+            )
+            self.actual_start_volume.name = "Actual Start Volume"
+            return self.actual_start_volume
+
+        actual_df = self.master_df[[mh.OriginalT0, mh.ReviewType, mh.TaskStatus]].copy()
+        actual_df[mh.OriginalT0] = pd.to_datetime(actual_df[mh.OriginalT0], errors="coerce").dt.normalize()
+        actual_df[mh.ReviewType] = actual_df[mh.ReviewType].apply(lambda x: "PR" if "PR" in str(x) else "Trigger")
+        actual_df["Status"] = actual_df[mh.TaskStatus].map(self.wbh_status)
+        actual_df = actual_df.dropna(subset=[mh.OriginalT0, "Status"])
+        actual_df = actual_df[actual_df[mh.OriginalT0] <= cutoff_date]
+        actual_df = actual_df[actual_df["Status"].isin(self.actual_start_status)]
+        actual_df["Period"] = actual_df[mh.OriginalT0].dt.to_period(self.frequency)
+
+        if actual_df.empty:
+            self.actual_start_volume = pd.Series(
+                dtype=int,
+                index=pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Period"])
+            )
+        else:
+            self.actual_start_volume = actual_df.groupby([mh.ReviewType, "Period"]).size()
+            self.actual_start_volume.index = self.actual_start_volume.index.set_names(["Case Type", "Period"])
+
+        self.actual_start_volume.name = "Actual Start Volume"
+        return self.actual_start_volume
 
     def calculate_remaining_bow_volume(self):
         if self.input_bow_volume.empty:
@@ -237,23 +335,25 @@ class DataProcessor:
         self.calculate_received_volume(cutoff_date=actual_cutoff_date)
 
         input_frequency = self.input_bow_volume_config["frequency"]
-        if mh.OriginalT0 in self.master_df.columns:
-            received_df = self.master_df[[mh.OriginalT0]].copy()
+        if mh.OriginalT0 in self.master_df.columns and mh.ReviewType in self.master_df.columns:
+            received_df = self.master_df[[mh.OriginalT0, mh.ReviewType]].copy()
+            received_df[mh.ReviewType] = received_df[mh.ReviewType].apply(lambda x: "PR" if "PR" in str(x) else "Trigger")
             received_df[mh.OriginalT0] = pd.to_datetime(received_df[mh.OriginalT0], errors="coerce").dt.normalize()
             received_df = received_df.dropna(subset=[mh.OriginalT0])
             received_df = received_df[received_df[mh.OriginalT0] <= actual_cutoff_date]
             received_df["Input Period"] = received_df[mh.OriginalT0].dt.to_period(input_frequency)
-            received_by_input_period = received_df.groupby("Input Period").size()
+            received_by_input_period = received_df.groupby([mh.ReviewType, "Input Period"]).size()
+            received_by_input_period.index = received_by_input_period.index.set_names(["Case Type", "Input Period"])
         else:
             received_by_input_period = pd.Series(dtype=int)
 
         remaining_output_volume = {}
         remaining_start_limit = actual_cutoff_date + pd.Timedelta(days=1)
 
-        for input_period, planned_volume in self.input_bow_volume.sort_index().items():
+        for (case_type, input_period), planned_volume in self.input_bow_volume.sort_index().items():
             input_start_date = input_period.start_time.normalize()
             input_end_date = (input_period + 1).start_time.normalize()
-            received_volume = received_by_input_period.get(input_period, 0)
+            received_volume = received_by_input_period.get((case_type, input_period), 0)
             remaining_volume = max(planned_volume - received_volume, 0)
             remaining_start_date = max(input_start_date, remaining_start_limit)
 
@@ -272,24 +372,27 @@ class DataProcessor:
                 ).days
 
                 if overlap_days > 0:
-                    remaining_output_volume[output_period] = (
-                        remaining_output_volume.get(output_period, 0)
+                    remaining_output_volume[(case_type, output_period)] = (
+                        remaining_output_volume.get((case_type, output_period), 0)
                         + remaining_volume * overlap_days / remaining_days
                     )
 
         if remaining_output_volume:
             remaining_output_volume = pd.Series(remaining_output_volume, dtype=float).sort_index()
+            remaining_output_volume.index = pd.MultiIndex.from_tuples(
+                remaining_output_volume.index,
+                names=["Case Type", "Period"]
+            )
         else:
             remaining_output_volume = pd.Series(
                 dtype=float,
-                index=pd.PeriodIndex([], freq=self.frequency, name="Period")
+                index=pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Period"])
             )
-        remaining_output_volume.index.name = "Period"
         remaining_output_volume.name = "Remaining BoW Volume"
 
         periods = self.bow_volume.index.union(remaining_output_volume.index).sort_values()
         remaining_df = pd.DataFrame(index=periods)
-        remaining_df.index.name = "Period"
+        remaining_df.index = remaining_df.index.set_names(["Case Type", "Period"])
         remaining_df["Input BoW Volume"] = self.bow_volume.reindex(periods, fill_value=0)
         remaining_df["Received Volume"] = self.received_volume.reindex(periods, fill_value=0)
         remaining_df["Remaining BoW Volume"] = remaining_output_volume.reindex(periods, fill_value=0)
@@ -314,3 +417,4 @@ self.calculate_completion_distribution()
 self.read_input_completion_percentage()
 self.read_input_bow_volume()
 self.calculate_remaining_bow_volume()
+self.calculate_actual_start_volume()
