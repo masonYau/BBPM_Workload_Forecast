@@ -65,44 +65,44 @@ class DataProcessor:
                 "Category": "Start Pipeline",
                 "Subcategory": "Plan",
                 "Metric": "Planned Start Volume",
-                "Display Name": "计划启动量",
+                "Display Name": "Planned Start Volume",
                 "Source": "Input_BoW_Volume.xlsx",
                 "Logic": "Monthly input BoW volume allocated to output periods by calendar-day overlap.",
                 "Cutoff": "N/A",
             },
             {
                 "Category": "Start Pipeline",
-                "Subcategory": "Tracker Received",
+                "Subcategory": "Master File Received",
                 "Metric": "Received Start Volume",
-                "Display Name": "接收启动量",
-                "Source": "BBPM Case tracker.xlsm",
+                "Display Name": "Received Start Volume",
+                "Source": "Master File",
                 "Logic": "All received cases aggregated by Original T0 and output period.",
                 "Cutoff": "Current date",
             },
             {
                 "Category": "Start Pipeline",
-                "Subcategory": "Tracker Open",
-                "Metric": "Open Received Start Volume",
-                "Display Name": "Open的接收启动量",
-                "Source": "BBPM Case tracker.xlsm",
-                "Logic": "Received cases still open after excluding completed and cancelled status.",
-                "Cutoff": "Tracker latest Original T0",
+                "Subcategory": "Master File WIP",
+                "Metric": "WIP Received Start Volume",
+                "Display Name": "WIP Received Start Volume",
+                "Source": "Master File",
+                "Logic": "Received cases still WIP after excluding completed and cancelled status.",
+                "Cutoff": "Master File latest Original T0",
             },
             {
                 "Category": "Start Pipeline",
                 "Subcategory": "Remaining Plan",
                 "Metric": "Remaining Planned Start Volume",
-                "Display Name": "剩余计划启动量",
-                "Source": "Input_BoW_Volume.xlsx + BBPM Case tracker.xlsm",
-                "Logic": "Input period plan minus received starts, then allocated to output periods after tracker cutoff.",
-                "Cutoff": "Tracker latest Original T0",
+                "Display Name": "Remaining Planned Start Volume",
+                "Source": "Input_BoW_Volume.xlsx + Master File",
+                "Logic": "Input period plan minus received starts, then allocated to output periods after Master File cutoff.",
+                "Cutoff": "Master File latest Original T0",
             },
             {
                 "Category": "Start Pipeline",
                 "Subcategory": "Actual",
                 "Metric": "Actual Start Volume",
-                "Display Name": "实际启动量",
-                "Source": "BBPM Case tracker.xlsm",
+                "Display Name": "Actual Start Volume",
+                "Source": "Master File",
                 "Logic": "Cases with status in Completed, WBH, Cancelled, WIP aggregated by Original T0.",
                 "Cutoff": "Current date",
             },
@@ -110,8 +110,8 @@ class DataProcessor:
                 "Category": "Completion",
                 "Subcategory": "Actual",
                 "Metric": "Actual Completion Volume",
-                "Display Name": "真实完成量",
-                "Source": "BBPM Case tracker.xlsm",
+                "Display Name": "Actual Completion Volume",
+                "Source": "Master File",
                 "Logic": "Completed cases aggregated by Approval/Cancel Date.",
                 "Cutoff": "Current date",
             },
@@ -119,28 +119,28 @@ class DataProcessor:
                 "Category": "Completion",
                 "Subcategory": "Forecast",
                 "Metric": "Forecast Completion Volume",
-                "Display Name": "预估完成量",
-                "Source": "Open received starts + remaining planned starts + completion distribution",
-                "Logic": "Open received and remaining planned starts multiplied by case-type completion probability distribution.",
-                "Cutoff": "Mixed: tracker cutoff for open received, current date for actual completion.",
+                "Display Name": "Forecast Completion Volume",
+                "Source": "WIP received starts + remaining planned starts + completion distribution",
+                "Logic": "WIP received and remaining planned starts multiplied by case-type completion probability distribution.",
+                "Cutoff": "Mixed: Master File cutoff for WIP received, current date for actual completion.",
             },
             {
                 "Category": "WBH Action",
                 "Subcategory": "Letter",
                 "Metric": "Forecast WBH Letter Volume",
-                "Display Name": "WBH信件量",
-                "Source": "Open received starts + remaining planned starts + completion distribution",
+                "Display Name": "Forecast WBH Letter Volume",
+                "Source": "WIP received starts + remaining planned starts + completion distribution",
                 "Logic": "Starts still uncompleted at T+90 for PR or T+60 for Trigger.",
-                "Cutoff": "Tracker latest Original T0 for open received.",
+                "Cutoff": "Master File latest Original T0 for WIP received.",
             },
             {
                 "Category": "WBH Action",
                 "Subcategory": "Call",
                 "Metric": "Forecast WBH Call Volume",
-                "Display Name": "WBH来电量",
-                "Source": "Open received starts + remaining planned starts + completion distribution",
+                "Display Name": "Forecast WBH Call Volume",
+                "Source": "WIP received starts + remaining planned starts + completion distribution",
                 "Logic": "Starts still uncompleted at T+95 for PR or T+65 for Trigger.",
-                "Cutoff": "Tracker latest Original T0 for open received.",
+                "Cutoff": "Master File latest Original T0 for WIP received.",
             },
         ]
 
@@ -645,10 +645,10 @@ class DataProcessor:
         periods = source_volume.index.sort_values()
         wbh_letter_df = pd.DataFrame(index=periods)
         wbh_letter_df.index = wbh_letter_df.index.set_names(["Case Type", "Period"])
-        wbh_letter_df["Open Received WBH Letter Volume"] = source_volume.get("Open Received", 0)
+        wbh_letter_df["WIP Received WBH Letter Volume"] = source_volume.get("Open Received", 0)
         wbh_letter_df["Remaining BoW WBH Letter Volume"] = source_volume.get("Remaining BoW", 0)
         wbh_letter_df["Forecast WBH Letter Volume"] = (
-            wbh_letter_df["Open Received WBH Letter Volume"]
+            wbh_letter_df["WIP Received WBH Letter Volume"]
             + wbh_letter_df["Remaining BoW WBH Letter Volume"]
         )
 
@@ -748,10 +748,10 @@ class DataProcessor:
         periods = source_volume.index.sort_values()
         wbh_call_df = pd.DataFrame(index=periods)
         wbh_call_df.index = wbh_call_df.index.set_names(["Case Type", "Period"])
-        wbh_call_df["Open Received WBH Call Volume"] = source_volume.get("Open Received", 0)
+        wbh_call_df["WIP Received WBH Call Volume"] = source_volume.get("Open Received", 0)
         wbh_call_df["Remaining BoW WBH Call Volume"] = source_volume.get("Remaining BoW", 0)
         wbh_call_df["Forecast WBH Call Volume"] = (
-            wbh_call_df["Open Received WBH Call Volume"]
+            wbh_call_df["WIP Received WBH Call Volume"]
             + wbh_call_df["Remaining BoW WBH Call Volume"]
         )
 
@@ -962,9 +962,9 @@ class DataProcessor:
         workload_series = {
             "Planned Start Volume": normalize_volume_series(self.bow_volume, "Planned Start Volume"),
             "Received Start Volume": normalize_volume_series(received_start_volume, "Received Start Volume"),
-            "Open Received Start Volume": normalize_volume_series(
+            "WIP Received Start Volume": normalize_volume_series(
                 open_received_start_volume,
-                "Open Received Start Volume"
+                "WIP Received Start Volume"
             ),
             "Remaining Planned Start Volume": normalize_volume_series(
                 remaining_start_volume,
@@ -1083,6 +1083,15 @@ class DataProcessor:
             "WBH Action": PatternFill("solid", fgColor="FCE4D6"),
         }
 
+        if os.path.exists(output_path):
+            try:
+                with open(output_path, "a+b"):
+                    pass
+            except PermissionError:
+                base_path, extension = os.path.splitext(output_path)
+                timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+                output_path = f"{base_path}_{timestamp}{extension}"
+
         with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
             for sheet_name, output_df in output_tables.items():
                 safe_sheet_name = sheet_name[:31]
@@ -1093,7 +1102,7 @@ class DataProcessor:
 
                 output_df.to_excel(writer, sheet_name=safe_sheet_name, index=False)
                 worksheet = writer.sheets[safe_sheet_name]
-                worksheet.freeze_panes = "A2"
+                worksheet.freeze_panes = "F2" if safe_sheet_name == "01_Workload_Wide" else "A2"
                 worksheet.auto_filter.ref = worksheet.dimensions
 
                 for cell in worksheet[1]:
@@ -1127,6 +1136,8 @@ class DataProcessor:
                                 cell.number_format = "#,##0.0"
                         elif "Date" in header or header.endswith("Start") or header.endswith("End"):
                             cell.number_format = "yyyy-mm-dd"
+                        elif isinstance(cell.value, (int, float)):
+                            cell.number_format = "#,##0.0"
 
                 for column_cells in worksheet.columns:
                     column_letter = get_column_letter(column_cells[0].column)
@@ -1153,11 +1164,11 @@ class DataProcessor:
             [
                 {"Item": "Current Date", "Value": self.get_current_cutoff_date()},
                 {"Item": "Actual Cutoff Date", "Value": self.infer_actual_cutoff_date()},
-                {"Item": "Tracker Cutoff Date", "Value": self.infer_remaining_bow_cutoff_date()},
+                {"Item": "Master File Cutoff Date", "Value": self.infer_remaining_bow_cutoff_date()},
                 {"Item": "Output Frequency", "Value": self.frequency},
                 {"Item": "Completion Input Frequency", "Value": self.input_completion_percentage_config["frequency"]},
                 {"Item": "BoW Input Frequency", "Value": self.input_bow_volume_config["frequency"]},
-                {"Item": "Open Received Status", "Value": ", ".join(sorted(self.open_start_status))},
+                {"Item": "WIP Received Status", "Value": ", ".join(sorted(self.open_start_status))},
                 {"Item": "Actual Start Status", "Value": ", ".join(sorted(self.actual_start_status))},
                 {"Item": "Actual Completion Status", "Value": ", ".join(sorted(self.actual_completion_status))},
                 {"Item": "WBH Letter Rule", "Value": "PR T+90, Trigger T+60"},
@@ -1165,29 +1176,47 @@ class DataProcessor:
             ]
         )
 
-        workload_wide = self.add_period_display_columns(workload_df.reset_index(), period_columns=["Period"])
-        workload_wide = workload_wide.rename(
-            columns={
-                metric: f"{metric_lookup[metric]['Category']} | {metric_lookup[metric]['Display Name']}"
-                for metric in workload_df.columns
-                if metric in metric_lookup
-            }
-        )
-
-        workload_long = workload_df.reset_index().melt(
+        metric_order = {
+            metric: order
+            for order, metric in enumerate(metric_definitions["Metric"])
+        }
+        workload_long_source = workload_df.reset_index().melt(
             id_vars=["Case Type", "Period"],
             var_name="Metric",
             value_name="Volume"
         )
-        workload_long["Category"] = workload_long["Metric"].map(
+        workload_long_source["Category"] = workload_long_source["Metric"].map(
             lambda metric: metric_lookup.get(metric, {}).get("Category", "Other")
         )
-        workload_long["Subcategory"] = workload_long["Metric"].map(
+        workload_long_source["Subcategory"] = workload_long_source["Metric"].map(
             lambda metric: metric_lookup.get(metric, {}).get("Subcategory", "Other")
         )
-        workload_long["Display Name"] = workload_long["Metric"].map(
+        workload_long_source["Display Name"] = workload_long_source["Metric"].map(
             lambda metric: metric_lookup.get(metric, {}).get("Display Name", metric)
         )
+        workload_long_source["Metric Order"] = workload_long_source["Metric"].map(metric_order).fillna(999)
+
+        workload_wide = workload_long_source.pivot_table(
+            index=["Category", "Subcategory", "Metric Order", "Metric", "Display Name", "Case Type"],
+            columns="Period",
+            values="Volume",
+            aggfunc="sum",
+            fill_value=0
+        ).reset_index()
+        period_columns = sorted(
+            [column for column in workload_wide.columns if isinstance(column, pd.Period)]
+        )
+        workload_wide = workload_wide[
+            ["Category", "Subcategory", "Metric Order", "Metric", "Display Name", "Case Type"]
+            + period_columns
+        ]
+        workload_wide = workload_wide.sort_values(["Metric Order", "Case Type"]).drop(columns=["Metric Order"])
+        workload_wide.columns = [
+            str(column) if isinstance(column, pd.Period) else column
+            for column in workload_wide.columns
+        ]
+
+        workload_long = workload_long_source.drop(columns=["Metric Order"])
         workload_long = self.add_period_display_columns(workload_long, period_columns=["Period"])
         workload_long = workload_long[
             [
@@ -1222,9 +1251,9 @@ class DataProcessor:
                 self.remaining_bow_volume,
                 period_columns=["Period"]
             ),
-            "13_Open_Received_Start": self.output_table_from_series(
+            "13_WIP_Received_Start": self.output_table_from_series(
                 self.open_received_start_volume,
-                "Open Received Start Volume",
+                "WIP Received Start Volume",
                 period_columns=["Start Period"]
             ),
             "20_Completion": self.output_table_from_dataframe(
