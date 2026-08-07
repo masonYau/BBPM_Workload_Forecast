@@ -367,7 +367,7 @@ class DataProcessor:
 
     def calculate_open_received_start_volume(self, cutoff_date=None):
         if cutoff_date is None:
-            cutoff_date = self.infer_actual_cutoff_date()
+            cutoff_date = self.infer_remaining_bow_cutoff_date()
 
         if mh.OriginalT0 not in self.master_df.columns or mh.ReviewType not in self.master_df.columns or mh.TaskStatus not in self.master_df.columns:
             self.open_received_start_volume = pd.Series(
@@ -516,7 +516,8 @@ class DataProcessor:
         if self.remaining_bow_volume.empty:
             self.calculate_remaining_bow_volume()
 
-        open_received_start_volume = self.calculate_open_received_start_volume(cutoff_date=cutoff_date)
+        open_received_cutoff_date = self.infer_remaining_bow_cutoff_date()
+        open_received_start_volume = self.calculate_open_received_start_volume(cutoff_date=open_received_cutoff_date)
         wbh_letter_volume = {}
 
         for (case_type, start_period), start_volume in open_received_start_volume.items():
@@ -618,7 +619,8 @@ class DataProcessor:
         if self.remaining_bow_volume.empty:
             self.calculate_remaining_bow_volume()
 
-        open_received_start_volume = self.calculate_open_received_start_volume(cutoff_date=cutoff_date)
+        open_received_cutoff_date = self.infer_remaining_bow_cutoff_date()
+        open_received_start_volume = self.calculate_open_received_start_volume(cutoff_date=open_received_cutoff_date)
         wbh_call_volume = {}
 
         for (case_type, start_period), start_volume in open_received_start_volume.items():
@@ -629,7 +631,7 @@ class DataProcessor:
                 start_volume,
                 source="Open Received",
                 condition_on_cutoff=True,
-                cutoff_date=cutoff_date
+                cutoff_date=open_received_cutoff_date
             )
 
         if not self.remaining_bow_volume.empty:
@@ -710,7 +712,8 @@ class DataProcessor:
         if self.remaining_bow_volume.empty:
             self.calculate_remaining_bow_volume()
 
-        open_received_start_volume = self.calculate_open_received_start_volume(cutoff_date=cutoff_date)
+        open_received_cutoff_date = self.infer_remaining_bow_cutoff_date()
+        open_received_start_volume = self.calculate_open_received_start_volume(cutoff_date=open_received_cutoff_date)
         forecast_completion_volume = {}
 
         for (case_type, start_period), start_volume in open_received_start_volume.items():
@@ -847,6 +850,9 @@ class DataProcessor:
             self.calculate_remaining_bow_volume()
 
         received_start_volume = self.calculate_received_volume(cutoff_date=cutoff_date)
+        open_received_start_volume = self.calculate_open_received_start_volume(
+            cutoff_date=self.infer_remaining_bow_cutoff_date()
+        )
         actual_start_volume = self.calculate_actual_start_volume(cutoff_date=cutoff_date)
         completion_volume = self.calculate_completion_volume(cutoff_date=cutoff_date)
         wbh_letter_volume = self.calculate_wbh_letter_volume(cutoff_date=cutoff_date)
@@ -871,6 +877,10 @@ class DataProcessor:
         workload_series = {
             "Planned Start Volume": normalize_volume_series(self.bow_volume, "Planned Start Volume"),
             "Received Start Volume": normalize_volume_series(received_start_volume, "Received Start Volume"),
+            "Open Received Start Volume": normalize_volume_series(
+                open_received_start_volume,
+                "Open Received Start Volume"
+            ),
             "Remaining Planned Start Volume": normalize_volume_series(
                 remaining_start_volume,
                 "Remaining Planned Start Volume"
