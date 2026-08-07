@@ -39,8 +39,10 @@ class DataProcessor:
         self.forecast_completion_volume = pd.Series()
         self.actual_completion_volume = pd.Series()
         self.forecast_wbh_letter_volume = pd.Series()
+        self.forecast_wbh_call_volume = pd.Series()
         self.completion_volume = pd.DataFrame()
         self.wbh_letter_volume = pd.DataFrame()
+        self.wbh_call_volume = pd.DataFrame()
         self.remaining_bow_volume = pd.DataFrame()
         self.actual_cutoff_date = pd.NaT
         self.remaining_bow_cutoff_date = pd.NaT
@@ -50,6 +52,10 @@ class DataProcessor:
         self.wbh_letter_days = {
             "PR": 90,
             "Trigger": 60,
+        }
+        self.wbh_call_days = {
+            "PR": 95,
+            "Trigger": 65,
         }
 
         self.input_completion_percentage_config = {
@@ -450,6 +456,10 @@ class DataProcessor:
         normalized_case_type = "PR" if "PR" in str(case_type).upper() else "Trigger"
         return self.wbh_letter_days.get(normalized_case_type)
 
+    def get_wbh_call_days(self, case_type):
+        normalized_case_type = "PR" if "PR" in str(case_type).upper() else "Trigger"
+        return self.wbh_call_days.get(normalized_case_type)
+
     def calculate_uncompleted_probability(self, case_type, elapsed_periods):
         completion_distribution = self.get_case_completion_distribution(case_type)
         if completion_distribution.empty:
@@ -559,6 +569,108 @@ class DataProcessor:
         self.forecast_wbh_letter_volume.name = "Forecast WBH Letter Volume"
         self.wbh_letter_volume = wbh_letter_df
         return self.wbh_letter_volume
+
+    def add_wbh_call_volume(self, wbh_call_volume, case_type, start_period, start_volume, source,
+                            condition_on_cutoff=False, cutoff_date=None):
+        if start_volume <= 0:
+            return
+
+        call_days = self.get_wbh_call_days(case_type)
+        if call_days is None:
+            return
+
+        call_days_to_period = call_days // self.frequency_days[self.frequency]
+        call_period = start_period + call_days_to_period
+        call_elapsed_periods = max(call_period.ordinal - start_period.ordinal, 0)
+        call_probability = self.calculate_uncompleted_probability(case_type, call_elapsed_periods)
+        if call_probability is None or call_probability <= 0:
+            return
+
+        output_period = call_period
+        if condition_on_cutoff and cutoff_date is not None:
+            cutoff_period = pd.to_datetime(cutoff_date).to_period(self.frequency)
+            cutoff_elapsed_periods = max(cutoff_period.ordinal - start_period.ordinal, 0)
+
+            if call_elapsed_periods <= cutoff_elapsed_periods:
+                call_probability = 1
+            else:
+                cutoff_survival_probability = self.calculate_uncompleted_probability(
+                    case_type,
+                    cutoff_elapsed_periods
+                )
+                if cutoff_survival_probability is None or cutoff_survival_probability <= 0:
+                    return
+                call_probability = call_probability / cutoff_survival_probability
+
+        wbh_call_volume[(case_type, output_period, source)] = (
+            wbh_call_volume.get((case_type, output_period, source), 0)
+            + start_volume * call_probability
+        )
+
+    def calculate_wbh_call_volume(self, cutoff_date=None):
+        if cutoff_date is None:
+            cutoff_date = self.infer_actual_cutoff_date()
+
+        if self.completion_distribution.empty:
+            self.read_input_completion_percentage()
+
+        if self.remaining_bow_volume.empty:
+            self.calculate_remaining_bow_volume()
+
+        open_received_start_volume = self.calculate_open_received_start_volume(cutoff_date=cutoff_date)
+        wbh_call_volume = {}
+
+        for (case_type, start_period), start_volume in open_received_start_volume.items():
+            self.add_wbh_call_volume(
+                wbh_call_volume,
+                case_type,
+                start_period,
+                start_volume,
+                source="Open Received",
+                condition_on_cutoff=True,
+                cutoff_date=cutoff_date
+            )
+
+        if not self.remaining_bow_volume.empty:
+            remaining_start_volume = self.remaining_bow_volume["Remaining BoW Volume"]
+            for (case_type, start_period), start_volume in remaining_start_volume.items():
+                self.add_wbh_call_volume(
+                    wbh_call_volume,
+                    case_type,
+                    start_period,
+                    start_volume,
+                    source="Remaining BoW",
+                    condition_on_cutoff=False,
+                    cutoff_date=cutoff_date
+                )
+
+        if wbh_call_volume:
+            wbh_call_volume = pd.Series(wbh_call_volume, dtype=float).sort_index()
+            wbh_call_volume.index = pd.MultiIndex.from_tuples(
+                wbh_call_volume.index,
+                names=["Case Type", "Period", "Source"]
+            )
+        else:
+            wbh_call_volume = pd.Series(
+                dtype=float,
+                index=pd.MultiIndex.from_arrays([[], [], []], names=["Case Type", "Period", "Source"])
+            )
+
+        source_volume = wbh_call_volume.unstack("Source", fill_value=0)
+        periods = source_volume.index.sort_values()
+        wbh_call_df = pd.DataFrame(index=periods)
+        wbh_call_df.index = wbh_call_df.index.set_names(["Case Type", "Period"])
+        wbh_call_df["Open Received WBH Call Volume"] = source_volume.get("Open Received", 0)
+        wbh_call_df["Remaining BoW WBH Call Volume"] = source_volume.get("Remaining BoW", 0)
+        wbh_call_df["Forecast WBH Call Volume"] = (
+            wbh_call_df["Open Received WBH Call Volume"]
+            + wbh_call_df["Remaining BoW WBH Call Volume"]
+        )
+
+        self.forecast_wbh_call_volume = wbh_call_df["Forecast WBH Call Volume"]
+        self.forecast_wbh_call_volume.name = "Forecast WBH Call Volume"
+        self.wbh_call_volume = wbh_call_df
+        return self.wbh_call_volume
 
     def add_forecast_completion_volume(self, forecast_completion_volume, case_type, start_period, start_volume,
                                        condition_on_cutoff=False, cutoff_date=None):
@@ -739,3 +851,4 @@ self.calculate_remaining_bow_volume()
 self.calculate_actual_start_volume()
 self.calculate_completion_volume()
 self.calculate_wbh_letter_volume()
+self.calculate_wbh_call_volume()
