@@ -78,6 +78,7 @@ class WorkloadExcelReporter:
             processor.calculate_remaining_bow_volume()
 
         master_file_cutoff_date = processor.infer_remaining_bow_cutoff_date()
+        current_cutoff_date = processor.get_current_cutoff_date()
         wip_received_start_volume = processor.calculate_open_received_start_volume(
             cutoff_date=master_file_cutoff_date
         )
@@ -94,7 +95,7 @@ class WorkloadExcelReporter:
                     "Start Period": start_period,
                     "Start Volume": float(start_volume),
                     "Conditioned on Master File Cutoff": True,
-                    "Master File Cutoff Date": master_file_cutoff_date,
+                    "Cutoff Date": current_cutoff_date,
                 }
             )
 
@@ -111,7 +112,7 @@ class WorkloadExcelReporter:
                         "Start Period": start_period,
                         "Start Volume": float(start_volume),
                         "Conditioned on Master File Cutoff": False,
-                        "Master File Cutoff Date": pd.NaT,
+                        "Cutoff Date": pd.NaT,
                     }
                 )
 
@@ -126,7 +127,7 @@ class WorkloadExcelReporter:
             start_period = start_input["Start Period"]
             start_volume = start_input["Start Volume"]
             conditioned_on_cutoff = start_input["Conditioned on Master File Cutoff"]
-            cutoff_date = start_input["Master File Cutoff Date"]
+            cutoff_date = start_input["Cutoff Date"]
             completion_distribution = processor.get_case_completion_distribution(case_type)
             if completion_distribution.empty:
                 continue
@@ -162,7 +163,7 @@ class WorkloadExcelReporter:
                         "Start Period": start_period,
                         "Start Volume": start_volume,
                         "Conditioned on Master File Cutoff": conditioned_on_cutoff,
-                        "Master File Cutoff Date": cutoff_date,
+                        "Cutoff Date": cutoff_date,
                         "Cutoff Period": cutoff_period,
                         "Cutoff Elapsed Periods": cutoff_elapsed_periods,
                         "Completed Probability Before Cutoff": completed_probability_before_cutoff,
@@ -202,7 +203,7 @@ class WorkloadExcelReporter:
             start_period = start_input["Start Period"]
             start_volume = start_input["Start Volume"]
             conditioned_on_cutoff = start_input["Conditioned on Master File Cutoff"]
-            cutoff_date = start_input["Master File Cutoff Date"]
+            cutoff_date = start_input["Cutoff Date"]
             action_days = days_getter(case_type)
             if action_days is None:
                 continue
@@ -255,7 +256,7 @@ class WorkloadExcelReporter:
                     "Completed Probability Before Action": completed_probability_before_action,
                     "Uncompleted Probability at Action": uncompleted_probability_at_action,
                     "Conditioned on Master File Cutoff": conditioned_on_cutoff,
-                    "Master File Cutoff Date": cutoff_date,
+                    "Cutoff Date": cutoff_date,
                     "Cutoff Period": cutoff_period,
                     "Cutoff Elapsed Periods": cutoff_elapsed_periods,
                     "Uncompleted Probability at Cutoff": uncompleted_probability_at_cutoff,
@@ -363,7 +364,7 @@ class WorkloadExcelReporter:
             [
                 {"Item": "Current Date", "Value": processor.get_current_cutoff_date()},
                 {"Item": "Actual Cutoff Date", "Value": processor.infer_actual_cutoff_date()},
-                {"Item": "Master File Cutoff Date", "Value": processor.infer_remaining_bow_cutoff_date()},
+                {"Item": "Cutoff Date", "Value": processor.infer_remaining_bow_cutoff_date()},
                 {"Item": "Output Frequency", "Value": processor.frequency},
                 {
                     "Item": "Completion Input Frequency",

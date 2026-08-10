@@ -408,13 +408,13 @@ class DataProcessor:
         if original_t0.empty:
             self.remaining_bow_cutoff_date = current_date
         else:
-            self.remaining_bow_cutoff_date = min(original_t0.max().normalize(), current_date)
+            self.remaining_bow_cutoff_date = max(original_t0.max().normalize(), current_date)
 
         return self.remaining_bow_cutoff_date
 
     def calculate_received_volume(self, cutoff_date=None):
         if cutoff_date is None:
-            cutoff_date = self.infer_actual_cutoff_date()
+            cutoff_date = self.infer_remaining_bow_cutoff_date()
 
         if mh.OriginalT0 not in self.master_df.columns or mh.ReviewType not in self.master_df.columns:
             self.received_volume = pd.Series(
@@ -804,6 +804,7 @@ class DataProcessor:
                 return
 
         for n_period, percentage in completion_distribution.items():
+
             n_period = int(n_period)
             if condition_on_cutoff and n_period < elapsed_periods:
                 continue
@@ -836,7 +837,7 @@ class DataProcessor:
                 start_period,
                 start_volume,
                 condition_on_cutoff=True,
-                cutoff_date=open_received_cutoff_date
+                cutoff_date=cutoff_date
             )
 
         if not self.remaining_bow_volume.empty:
@@ -962,7 +963,9 @@ class DataProcessor:
         if self.remaining_bow_volume.empty:
             self.calculate_remaining_bow_volume()
 
-        received_start_volume = self.calculate_received_volume(cutoff_date=cutoff_date)
+        received_start_volume = self.calculate_received_volume(
+            cutoff_date=self.infer_remaining_bow_cutoff_date()
+        )
         open_received_start_volume = self.calculate_open_received_start_volume(
             cutoff_date=self.infer_remaining_bow_cutoff_date()
         )
