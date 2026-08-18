@@ -14,6 +14,14 @@ Run from the repository root:
 C:\Users\HP\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe .\main.py
 ```
 
+Use a custom config file:
+
+使用自定义配置文件：
+
+```powershell
+C:\Users\HP\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe .\main.py --config .\config.json
+```
+
 Generated files / 生成文件：
 
 | File / 文件 | Purpose / 用途 |
@@ -175,13 +183,22 @@ These parameters are used when calling functions from Python instead of running 
 | `build_workload_processor` | `current_date` | Required / 必填 | Sets the current/cutoff date used by one processor. / 设置单个处理器使用的当前日期和截断日期。 |
 | `build_workload_processor` | `frequency` | Required / 必填 | Sets the output frequency for one processor. It must exist in `run.frequency_days`. / 设置单个处理器的输出颗粒度，必须存在于 `run.frequency_days`。 |
 | `build_workload_processor` | `config` | `load_config()` inside `DataProcessor` | Optional in-memory config override. Passing the same config avoids reloading `config.json`. / 可选的内存配置覆盖。传入同一份配置可避免重复读取 `config.json`。 |
+| `main` | `config_path` | `None` | Optional path to a config file. When omitted, the default repository `config.json` is used. The CLI supports both `python main.py path\to\config.json` and `python main.py --config path\to\config.json`. / 可选配置文件路径。省略时使用仓库默认 `config.json`。命令行同时支持 `python main.py path\to\config.json` 和 `python main.py --config path\to\config.json`。 |
 | `run_workload_forecast` | `current_date` | `datetime.now()` | Sets the cutoff/current date for calculations. / 设置计算使用的当前日期和截断日期。 |
 | `run_workload_forecast` | `frequency` | `run.default_forecast_frequency` | Sets the Excel forecast frequency. / 设置 Excel 预测颗粒度。 |
 | `run_workload_forecast` | `output_path` | `outputs.excel_path` | Overrides the Excel output path for that call. / 覆盖本次调用的 Excel 输出路径。 |
+| `run_workload_forecast` | `config_path` | `None` | Optional config file path for that call. / 本次调用可选的配置文件路径。 |
 | `run_workload_visualization` | `current_date` | `datetime.now()` | Sets the cutoff/current date for all HTML frequency calculations. / 设置 HTML 各颗粒度计算使用的当前日期和截断日期。 |
 | `run_workload_visualization` | `frequencies` | All keys from `run.frequency_days` | Explicitly controls HTML frequencies when provided. If omitted, all configured frequencies are included. / 显式传入时控制 HTML 包含哪些颗粒度；省略时包含 `run.frequency_days` 中全部颗粒度。 |
 | `run_workload_visualization` | `output_path` | `outputs.html_path` | Overrides the HTML output path for that call. / 覆盖本次调用的 HTML 输出路径。 |
+| `run_workload_visualization` | `config_path` | `None` | Optional config file path for that call. / 本次调用可选的配置文件路径。 |
 | `WorkloadHtmlVisualizer` | `max_detail_rows` | `5000` | Caps rows embedded for each detail table in the HTML payload. Higher values show more detail but increase HTML size and browser load time. / 限制 HTML 中每张明细表嵌入的最大行数。数值越高，明细越完整，但 HTML 文件更大、浏览器加载更慢。 |
+
+## Source Archive Export / 源文件归档导出
+
+Run `copy_py_to_md.py` before committing. It exports both Python and JSON source files into the `copy/` folder as Markdown files with matching code fences.
+
+提交前运行 `copy_py_to_md.py`。它会把 Python 和 JSON 源文件都导出到 `copy/` 目录，生成带对应代码块语言标记的 Markdown 归档。
 
 ## Key Metric Effects / 关键指标影响关系
 

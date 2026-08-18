@@ -1,6 +1,7 @@
 # main.py
 
 ```python
+import argparse
 from datetime import datetime
 import logging
 import os
@@ -92,20 +93,21 @@ def build_workload_processor(current_date, frequency, config=None):
     return processor
 
 
-def run_workload_forecast(current_date=None, frequency=None, output_path=None):
+def run_workload_forecast(current_date=None, frequency=None, output_path=None, config_path=None):
     log_path = setup_logging()
     start_time = time.perf_counter()
     if current_date is None:
         current_date = datetime.now()
 
-    config = load_config()
+    config = load_config(config_path)
     if frequency is None:
         frequency = config["run"]["default_forecast_frequency"]
 
     logger.info(
-        "Excel forecast run start | current_date=%s frequency=%s output_path=%s log_path=%s",
+        "Excel forecast run start | current_date=%s frequency=%s config_path=%s output_path=%s log_path=%s",
         pd.to_datetime(current_date).strftime("%Y-%m-%d"),
         frequency,
+        config_path,
         output_path or config["outputs"]["excel_path"],
         log_path,
     )
@@ -126,20 +128,21 @@ def run_workload_forecast(current_date=None, frequency=None, output_path=None):
     return processor, reporter
 
 
-def run_workload_visualization(current_date=None, frequencies=None, output_path=None):
+def run_workload_visualization(current_date=None, frequencies=None, output_path=None, config_path=None):
     log_path = setup_logging()
     start_time = time.perf_counter()
     if current_date is None:
         current_date = datetime.now()
 
-    config = load_config()
+    config = load_config(config_path)
     if frequencies is None:
         frequencies = get_html_frequencies(config)
 
     logger.info(
-        "HTML visualization run start | current_date=%s frequencies=%s output_path=%s log_path=%s",
+        "HTML visualization run start | current_date=%s frequencies=%s config_path=%s output_path=%s log_path=%s",
         pd.to_datetime(current_date).strftime("%Y-%m-%d"),
         ",".join(frequencies),
+        config_path,
         output_path or config["outputs"]["html_path"],
         log_path,
     )
@@ -163,16 +166,17 @@ def run_workload_visualization(current_date=None, frequencies=None, output_path=
     return visualizer
 
 
-def main():
+def main(config_path=None):
     log_path = setup_logging()
     start_time = time.perf_counter()
-    config = load_config()
+    config = load_config(config_path)
     run_date = datetime.now()
     default_frequency = config["run"]["default_forecast_frequency"]
     html_frequencies = get_html_frequencies(config)
     logger.info(
-        "Workload forecast main start | current_date=%s default_frequency=%s html_frequencies=%s log_path=%s",
+        "Workload forecast main start | current_date=%s config_path=%s default_frequency=%s html_frequencies=%s log_path=%s",
         pd.to_datetime(run_date).strftime("%Y-%m-%d"),
+        config_path,
         default_frequency,
         ",".join(html_frequencies),
         log_path,
@@ -205,6 +209,23 @@ def main():
     )
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Generate workload forecast Excel and HTML reports.")
+    parser.add_argument(
+        "config_path",
+        nargs="?",
+        help="Optional path to config.json.",
+    )
+    parser.add_argument(
+        "--config",
+        dest="config_path_option",
+        metavar="CONFIG_PATH",
+        help="Optional path to config.json. Overrides the positional config path when both are provided.",
+    )
+    args = parser.parse_args()
+    return args.config_path_option or args.config_path
+
+
 if __name__ == "__main__":
-    main()
+    main(config_path=parse_args())
 ```

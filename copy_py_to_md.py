@@ -3,6 +3,10 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_ROOT / "copy"
+SOURCE_EXTENSIONS = {
+    ".py": "python",
+    ".json": "json",
+}
 SKIP_DIRS = {
     ".git",
     ".idea",
@@ -21,10 +25,11 @@ def should_skip(path: Path) -> bool:
     return any(part in SKIP_DIRS for part in path.relative_to(PROJECT_ROOT).parts)
 
 
-def iter_python_files() -> list[Path]:
+def iter_source_files() -> list[Path]:
     return sorted(
         path
-        for path in PROJECT_ROOT.rglob("*.py")
+        for extension in SOURCE_EXTENSIONS
+        for path in PROJECT_ROOT.rglob(f"*{extension}")
         if path.is_file() and not should_skip(path)
     )
 
@@ -44,21 +49,23 @@ def markdown_fence(code: str) -> str:
 def write_markdown(source_path: Path, md_path: Path, code: str) -> None:
     relative_source = source_path.relative_to(PROJECT_ROOT).as_posix()
     fence = markdown_fence(code)
+    language = SOURCE_EXTENSIONS.get(source_path.suffix, "")
     md_path.write_text(
-        f"# {relative_source}\n\n{fence}python\n{code.rstrip()}\n{fence}\n",
+        f"# {relative_source}\n\n{fence}{language}\n{code.rstrip()}\n{fence}\n",
         encoding="utf-8",
     )
 
 
-def delete_python_copies() -> int:
+def delete_source_copies() -> int:
     if not OUTPUT_DIR.exists():
         return 0
 
     deleted_count = 0
-    for path in OUTPUT_DIR.rglob("*.py"):
-        if path.is_file():
-            path.unlink()
-            deleted_count += 1
+    for extension in SOURCE_EXTENSIONS:
+        for path in OUTPUT_DIR.rglob(f"*{extension}"):
+            if path.is_file():
+                path.unlink()
+                deleted_count += 1
     return deleted_count
 
 
@@ -66,7 +73,7 @@ def main() -> None:
     OUTPUT_DIR.mkdir(exist_ok=True)
 
     generated_count = 0
-    for source_path in iter_python_files():
+    for source_path in iter_source_files():
         relative_path = source_path.relative_to(PROJECT_ROOT)
         md_path = (OUTPUT_DIR / relative_path).with_suffix(".md")
 
@@ -75,10 +82,10 @@ def main() -> None:
         write_markdown(source_path, md_path, code)
         generated_count += 1
 
-    deleted_count = delete_python_copies()
+    deleted_count = delete_source_copies()
     print(
         f"Generated {generated_count} Markdown files in {OUTPUT_DIR}; "
-        f"deleted {deleted_count} copied Python files"
+        f"deleted {deleted_count} copied source files"
     )
 
 
