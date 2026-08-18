@@ -1,6 +1,3 @@
-# main.py
-
-```python
 from datetime import datetime
 
 import pandas as pd
@@ -59,4 +56,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```

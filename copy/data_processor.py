@@ -1,6 +1,3 @@
-# data_processor.py
-
-```python
 import pandas as pd
 from headers import MasterHeader as mh
 from headers import BowHeader as bh
@@ -1073,4 +1070,3 @@ class DataProcessor:
         self.calculate_wbh_letter_volume()
         self.calculate_wbh_call_volume()
         self.calculate_workload()
-```
