@@ -4,6 +4,7 @@ import os
 import numpy as np
 import pandas as pd
 
+from config_loader import load_config
 from workload_excel_report import WorkloadExcelReporter
 
 
@@ -61,8 +62,10 @@ class WorkloadHtmlVisualizer:
         if not processors_by_frequency:
             raise ValueError("processors_by_frequency is required.")
 
+        first_processor = next(iter(processors_by_frequency.values()))
+        self.config = getattr(first_processor, "config", None) or load_config()
         self.processors_by_frequency = processors_by_frequency
-        self.output_path = output_path or os.path.join("data", "Workload_Forecast_Visualization.html")
+        self.output_path = output_path or self.config["outputs"]["html_path"]
         self.max_detail_rows = max_detail_rows
         self.visualization_data = {}
 

@@ -6,30 +6,22 @@ import logging
 import numpy as np
 import math
 import os
+from config_loader import load_config
 
 class DataProcessor:
 
-    def __init__(self, current_date: pd.Timestamp, frequency: str):
+    def __init__(self, current_date: pd.Timestamp, frequency: str, config=None):
 
+        self.config = config or load_config()
+        input_config = self.config["inputs"]
+        run_config = self.config["run"]
+        business_rules = self.config["business_rules"]
         self.master_df = pd.DataFrame()
-        self.comple_status = {'E2E Completed', 'ReCompleted - WBH'}
-        self.wbh_status = {
-            'E2E Completed': 'Completed',
-            'WBH Imposed': 'WBH',
-            'ReCompleted - WBH': 'Completed',
-            'Cancelled - All AC Closed': 'Completed',
-            'CSEM': 'Completed',
-            'Cancelled - KPMG Managed': 'Cancelled',
-            'Cancelled - RM Managed': 'Cancelled',
-            'IN_PROGRESS': 'WIP',
-            'Cancelled - 2nd AC Opening under NTB': 'Cancelled',
-            'Cancelled - AC re-opened under NTB': 'Cancelled',
-            'Pending BA Approval': 'WIP',
-            'Not Loading': 'Not Initiated'
-        }
+        self.comple_status = set(business_rules["completed_source_statuses"])
+        self.wbh_status = dict(business_rules["status_mapping"])
         self.current_date = current_date
         self.frequency = frequency
-        self.frequency_days = {"D": 1, "W": 7, "M": 30}
+        self.frequency_days = dict(run_config["frequency_days"])
         self.completion_distribution = pd.Series()
         self.input_bow_volume = pd.Series()
         self.bow_volume = pd.Series()
@@ -47,20 +39,14 @@ class DataProcessor:
         self.remaining_bow_volume = pd.DataFrame()
         self.actual_cutoff_date = pd.NaT
         self.remaining_bow_cutoff_date = pd.NaT
-        self.actual_start_status = {'Completed', 'WBH', 'Cancelled', 'WIP'}
-        self.open_start_status = {'WBH', 'WIP', 'Not Initiated'}
-        self.actual_completion_status = {'Completed'}
-        self.wbh_letter_days = {
-            "PR": 90,
-            "Trigger": 60,
-        }
-        self.wbh_call_days = {
-            "PR": 95,
-            "Trigger": 65,
-        }
-        self.completion_upt = 4.5
-        self.init_upt = 0.5
-        self.working_hour = 129
+        self.actual_start_status = set(business_rules["actual_start_statuses"])
+        self.open_start_status = set(business_rules["open_start_statuses"])
+        self.actual_completion_status = set(business_rules["actual_completion_statuses"])
+        self.wbh_letter_days = dict(business_rules["wbh_letter_days"])
+        self.wbh_call_days = dict(business_rules["wbh_call_days"])
+        self.completion_upt = business_rules["completion_upt"]
+        self.init_upt = business_rules["init_upt"]
+        self.working_hour = business_rules["working_hour"]
         self.output_metric_definitions = [
             {
                 "Category": "Start Pipeline",
@@ -172,32 +158,17 @@ class DataProcessor:
             },
         ]
 
-        self.input_completion_percentage_config = {
-            "file_path": "Input_Completion_Percentage.xlsx",
-            "sheet_names": None,
-            "period_column": "Month",
-            "percentage_column": "Percentage",
-            "frequency": "M",
-        }
-
-        self.input_bow_volume_config = {
-            "file_path": "Input_BoW_Volume.xlsx",
-            "sheet_names": None,
-            "period_column": "Month",
-            "volume_column": "Volume",
-            "frequency": "M",
-        }
-        self.input_tracker_config = {
-            "file_path": "BBPM Case tracker(Updated) - *.xlsm",
-            "sheet_name": "Master File"
-        }
-        self.read_completion_percentage_from_input = True
+        self.input_completion_percentage_config = dict(input_config["completion_percentage"])
+        self.input_bow_volume_config = dict(input_config["bow_volume"])
+        self.input_tracker_config = dict(input_config["tracker"])
+        self.read_completion_percentage_from_input = business_rules["read_completion_percentage_from_input"]
 
     def read_data(self):
         from glob import glob
 
-        tracker_path_pattern = self.input_tracker_config["file_path"]
+        tracker_path_pattern = self.resolve_input_file_pattern(self.input_tracker_config["file_path"])
         sheet_name = self.input_tracker_config["sheet_name"]
+        skiprows = self.input_tracker_config.get("skiprows")
 
         matches = glob(tracker_path_pattern)
         if not matches:
@@ -205,7 +176,7 @@ class DataProcessor:
 
         tracker_path = max(matches, key=os.path.getmtime)
         print(f"Loading case tracker: {tracker_path}")
-        master_df = pd.read_excel(tracker_path, sheet_name=sheet_name, skiprows=1)
+        master_df = pd.read_excel(tracker_path, sheet_name=sheet_name, skiprows=skiprows)
         master_df[mh.CIN] = master_df[mh.CIN].astype(str).apply(lambda x: x.lstrip('0'))
         master_df[mh.OriginalT0] = pd.to_datetime(master_df[mh.OriginalT0])
         master_df[mh.ReviewType] = master_df[mh.ReviewType].apply(lambda x: "PR" if "PR" in x else "Trigger")
@@ -374,6 +345,18 @@ class DataProcessor:
             return data_file_path
 
         return file_path
+
+    def resolve_input_file_pattern(self, file_path_pattern):
+        from glob import glob
+
+        if glob(file_path_pattern):
+            return file_path_pattern
+
+        data_file_path_pattern = os.path.join("data", file_path_pattern)
+        if glob(data_file_path_pattern):
+            return data_file_path_pattern
+
+        return file_path_pattern
 
     def read_case_type_input_sheets(self, config):
         file_path = self.resolve_input_file_path(config["file_path"])

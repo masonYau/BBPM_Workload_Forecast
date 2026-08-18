@@ -2,12 +2,14 @@ import os
 
 import numpy as np
 import pandas as pd
+from config_loader import load_config
 
 
 class WorkloadExcelReporter:
 
     def __init__(self, processor):
         self.processor = processor
+        self.config = getattr(processor, "config", None) or load_config()
         self.output_excel_tables = {}
         self.output_excel_path = None
         self.forecast_completion_calculation = pd.DataFrame()
@@ -351,6 +353,12 @@ class WorkloadExcelReporter:
         setattr(processor, "demand_fte_calculation", calculation_df)
         return self.demand_fte_calculation
 
+    def format_rule_days(self, rule_days):
+        return ", ".join(
+            f"{case_type} T+{days}"
+            for case_type, days in rule_days.items()
+        )
+
     def build_output_excel_tables(self, cutoff_date=None, output_path=None, write_excel=True):
         processor = self.processor
         if cutoff_date is None:
@@ -377,8 +385,8 @@ class WorkloadExcelReporter:
                     "Item": "Actual Completion Status",
                     "Value": ", ".join(sorted(processor.actual_completion_status)),
                 },
-                {"Item": "WBH Letter Rule", "Value": "PR T+90, Trigger T+60"},
-                {"Item": "WBH Call Rule", "Value": "PR T+95, Trigger T+65"},
+                {"Item": "WBH Letter Rule", "Value": self.format_rule_days(processor.wbh_letter_days)},
+                {"Item": "WBH Call Rule", "Value": self.format_rule_days(processor.wbh_call_days)},
                 {"Item": "Completion UPT", "Value": processor.completion_upt},
                 {"Item": "Init UPT", "Value": processor.init_upt},
                 {"Item": "Working Hour", "Value": processor.working_hour},
@@ -503,7 +511,7 @@ class WorkloadExcelReporter:
 
     def write_output_excel(self, output_path=None, output_tables=None):
         if output_path is None:
-            output_path = os.path.join("data", "Workload_Forecast_Output.xlsx")
+            output_path = self.config["outputs"]["excel_path"]
 
         output_dir = os.path.dirname(output_path)
         if output_dir:
