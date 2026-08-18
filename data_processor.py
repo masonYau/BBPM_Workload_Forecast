@@ -187,14 +187,25 @@ class DataProcessor:
             "volume_column": "Volume",
             "frequency": "M",
         }
+        self.input_tracker_config = {
+            "file_path": "BBPM Case tracker(Updated) - *.xlsm",
+            "sheet_name": "Master File"
+        }
+        self.read_completion_percentage_from_input = True
 
     def read_data(self):
+        from glob import glob
 
-        tracker_path = "BBPM Case tracker.xlsm"
-        if not os.path.exists(tracker_path) and os.path.exists("data/BBPM Case tracker.xlsm"):
-            tracker_path = "data/BBPM Case tracker.xlsm"
+        tracker_path_pattern = self.input_tracker_config["file_path"]
+        sheet_name = self.input_tracker_config["sheet_name"]
 
-        master_df = pd.read_excel(tracker_path, sheet_name="Master File", skiprows=1)
+        matches = glob(tracker_path_pattern)
+        if not matches:
+            raise FileNotFoundError(f"No headcount files matched: {tracker_path_pattern}")
+
+        tracker_path = max(matches, key=os.path.getmtime)
+        print(f"Loading case tracker: {tracker_path}")
+        master_df = pd.read_excel(tracker_path, sheet_name=sheet_name, skiprows=1)
         master_df[mh.CIN] = master_df[mh.CIN].astype(str).apply(lambda x: x.lstrip('0'))
         master_df[mh.OriginalT0] = pd.to_datetime(master_df[mh.OriginalT0])
         master_df[mh.ReviewType] = master_df[mh.ReviewType].apply(lambda x: "PR" if "PR" in x else "Trigger")
@@ -641,7 +652,7 @@ class DataProcessor:
                 start_volume,
                 source="WIP Received",
                 condition_on_cutoff=True,
-                cutoff_date=open_received_cutoff_date
+                cutoff_date=cutoff_date
             )
 
         if not self.remaining_bow_volume.empty:
@@ -744,7 +755,7 @@ class DataProcessor:
                 start_volume,
                 source="WIP Received",
                 condition_on_cutoff=True,
-                cutoff_date=open_received_cutoff_date
+                cutoff_date=cutoff_date
             )
 
         if not self.remaining_bow_volume.empty:
@@ -1034,7 +1045,7 @@ class DataProcessor:
             workload_df["Actual Completion Volume"] + workload_df["Forecast Completion Volume"]
         )
         workload_df["Init Volume"] = (
-            workload_df["Actual Start Volume"] + workload_df["Remaining Planned Start Volume"]
+            workload_df["Received Start Volume"] + workload_df["Remaining Planned Start Volume"]
         )
         workload_df["Demand FTE"] = np.nan
         if self.working_hour:
@@ -1045,3 +1056,17 @@ class DataProcessor:
 
         self.workload_volume = workload_df
         return self.workload_volume
+
+    def run(self):
+        self.read_data()
+        if self.read_completion_percentage_from_input:
+            self.read_input_completion_percentage()
+        else:
+            self.calculate_completion_distribution()
+        self.read_input_bow_volume()
+        self.calculate_remaining_bow_volume()
+        self.calculate_actual_start_volume()
+        self.calculate_completion_volume()
+        self.calculate_wbh_letter_volume()
+        self.calculate_wbh_call_volume()
+        self.calculate_workload()

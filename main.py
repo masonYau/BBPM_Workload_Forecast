@@ -9,16 +9,7 @@ from workload_excel_report import WorkloadExcelReporter
 
 def build_workload_processor(current_date, frequency):
     processor = DataProcessor(pd.to_datetime(current_date), frequency)
-    processor.read_data()
-    processor.calculate_completion_distribution()
-    processor.read_input_completion_percentage()
-    processor.read_input_bow_volume()
-    processor.calculate_remaining_bow_volume()
-    processor.calculate_actual_start_volume()
-    processor.calculate_completion_volume()
-    processor.calculate_wbh_letter_volume()
-    processor.calculate_wbh_call_volume()
-    processor.calculate_workload()
+    processor.run()
     return processor
 
 
@@ -45,7 +36,7 @@ def run_workload_visualization(current_date=None, frequencies=("M", "W", "D"), o
     return visualizer
 
 
-if __name__ == "__main__":
+def main():
     run_date = datetime.now()
     monthly_processor = build_workload_processor(run_date, "M")
 
@@ -61,3 +52,7 @@ if __name__ == "__main__":
     html_visualizer = WorkloadHtmlVisualizer(processors)
     html_visualizer.write_html()
     print(f"Output HTML written to: {html_visualizer.output_path}")
+
+
+if __name__ == "__main__":
+    main()
