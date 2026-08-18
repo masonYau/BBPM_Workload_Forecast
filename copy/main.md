@@ -5,6 +5,7 @@ import argparse
 from datetime import datetime
 import logging
 import os
+import sys
 import time
 
 import pandas as pd
@@ -18,6 +19,8 @@ from workload_excel_report import WorkloadExcelReporter
 HTML_FREQUENCY_ORDER = ("M", "W", "D")
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE_PATH = os.path.join(PROJECT_ROOT, "workload_forecast.log")
+LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+CONSOLE_HANDLER_MARKER = "_workload_forecast_console_handler"
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +32,7 @@ def setup_logging(log_path=None, level=logging.INFO):
 
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
+    formatter = logging.Formatter(LOG_FORMAT)
 
     has_log_handler = any(
         isinstance(handler, logging.FileHandler)
@@ -38,10 +42,19 @@ def setup_logging(log_path=None, level=logging.INFO):
     if not has_log_handler:
         handler = logging.FileHandler(log_path, encoding="utf-8")
         handler.setLevel(level)
-        handler.setFormatter(logging.Formatter(
-            "%(asctime)s %(levelname)s [%(name)s] %(message)s"
-        ))
+        handler.setFormatter(formatter)
         root_logger.addHandler(handler)
+
+    has_console_handler = any(
+        getattr(handler, CONSOLE_HANDLER_MARKER, False)
+        for handler in root_logger.handlers
+    )
+    if not has_console_handler:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(level)
+        console_handler.setFormatter(formatter)
+        setattr(console_handler, CONSOLE_HANDLER_MARKER, True)
+        root_logger.addHandler(console_handler)
 
     return log_path
 

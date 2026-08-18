@@ -28,7 +28,7 @@ Generated files / 生成文件：
 | --- | --- |
 | `data/Workload_Forecast_Output.xlsx` | Excel forecast output. / Excel 预测结果。 |
 | `data/Workload_Forecast_Visualization.html` | Interactive HTML visualization. / 交互式 HTML 可视化。 |
-| `workload_forecast.log` | Local run log in the project root. / 项目根目录下的本地运行日志。 |
+| `workload_forecast.log` | Local run log in the project root. The same log messages are also printed to the terminal while running. / 项目根目录下的本地运行日志。运行时同一批日志也会打印到终端。 |
 
 ## Configuration File / 配置文件
 
@@ -179,7 +179,7 @@ These parameters are used when calling functions from Python instead of running 
 | Function / 函数 | Parameter / 参数 | Default / 默认值 | Function and impact / 作用和影响 |
 | --- | --- | --- | --- |
 | `setup_logging` | `log_path` | `workload_forecast.log` | Sets the log output file path. The default writes to the project root. / 设置日志输出文件路径。默认写到项目根目录。 |
-| `setup_logging` | `level` | `logging.INFO` | Sets minimum log level. Lower levels such as `DEBUG` can produce more detail; higher levels such as `WARNING` reduce routine progress logs. / 设置最低日志级别。较低级别如 `DEBUG` 会输出更多细节，较高级别如 `WARNING` 会减少常规进度日志。 |
+| `setup_logging` | `level` | `logging.INFO` | Sets minimum log level for both file and terminal logs. Lower levels such as `DEBUG` can produce more detail; higher levels such as `WARNING` reduce routine progress logs. / 同时设置文件日志和终端日志的最低级别。较低级别如 `DEBUG` 会输出更多细节，较高级别如 `WARNING` 会减少常规进度日志。 |
 | `build_workload_processor` | `current_date` | Required / 必填 | Sets the current/cutoff date used by one processor. / 设置单个处理器使用的当前日期和截断日期。 |
 | `build_workload_processor` | `frequency` | Required / 必填 | Sets the output frequency for one processor. It must exist in `run.frequency_days`. / 设置单个处理器的输出颗粒度，必须存在于 `run.frequency_days`。 |
 | `build_workload_processor` | `config` | `load_config()` inside `DataProcessor` | Optional in-memory config override. Passing the same config avoids reloading `config.json`. / 可选的内存配置覆盖。传入同一份配置可避免重复读取 `config.json`。 |
