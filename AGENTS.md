@@ -8,5 +8,6 @@
 - If that bundled Python path is unavailable in another environment, use any working Python interpreter to run:
   `python .\copy_py_to_md.py`
 - After the script runs, include all generated or updated `copy/*.md` files in the commit.
-- Do not add the copied `copy/*.py` files to git unless the user explicitly asks for them.
+- The `copy/` directory is for Markdown archives. Do not add `copy/*.py` files to git.
+- If any `copy/*.py` files are created or left over, delete them after generating the Markdown archives.
 - If the export script fails, stop and report the failure instead of committing stale Markdown files.

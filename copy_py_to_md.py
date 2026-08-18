@@ -1,5 +1,4 @@
 from pathlib import Path
-import shutil
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -51,22 +50,36 @@ def write_markdown(source_path: Path, md_path: Path, code: str) -> None:
     )
 
 
+def delete_python_copies() -> int:
+    if not OUTPUT_DIR.exists():
+        return 0
+
+    deleted_count = 0
+    for path in OUTPUT_DIR.rglob("*.py"):
+        if path.is_file():
+            path.unlink()
+            deleted_count += 1
+    return deleted_count
+
+
 def main() -> None:
     OUTPUT_DIR.mkdir(exist_ok=True)
 
-    copied_count = 0
+    generated_count = 0
     for source_path in iter_python_files():
         relative_path = source_path.relative_to(PROJECT_ROOT)
-        copied_path = OUTPUT_DIR / relative_path
-        md_path = copied_path.with_suffix(".md")
+        md_path = (OUTPUT_DIR / relative_path).with_suffix(".md")
 
-        copied_path.parent.mkdir(parents=True, exist_ok=True)
+        md_path.parent.mkdir(parents=True, exist_ok=True)
         code = source_path.read_text(encoding="utf-8")
-        shutil.copy2(source_path, copied_path)
         write_markdown(source_path, md_path, code)
-        copied_count += 1
+        generated_count += 1
 
-    print(f"Copied {copied_count} Python files and generated {copied_count} Markdown files in {OUTPUT_DIR}")
+    deleted_count = delete_python_copies()
+    print(
+        f"Generated {generated_count} Markdown files in {OUTPUT_DIR}; "
+        f"deleted {deleted_count} copied Python files"
+    )
 
 
 if __name__ == "__main__":
