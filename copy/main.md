@@ -77,6 +77,7 @@ def get_html_frequencies(config):
 
 
 def build_workload_processor(current_date, frequency, config=None):
+    setup_logging()
     start_time = time.perf_counter()
     logger.info(
         "Processor start | frequency=%s current_date=%s",
@@ -87,7 +88,7 @@ def build_workload_processor(current_date, frequency, config=None):
     try:
         processor.run()
     except Exception:
-        logger.exception("Processor failed | frequency=%s", frequency)
+        logger.error("Processor failed | frequency=%s", frequency, exc_info=True)
         raise
 
     period_count = 0
