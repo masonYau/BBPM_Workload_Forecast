@@ -2,15 +2,20 @@
 
 ```python
 import os
+import logging
 
 import numpy as np
 import pandas as pd
+from config_loader import load_config
+
+logger = logging.getLogger(__name__)
 
 
 class WorkloadExcelReporter:
 
     def __init__(self, processor):
         self.processor = processor
+        self.config = getattr(processor, "config", None) or load_config()
         self.output_excel_tables = {}
         self.output_excel_path = None
         self.forecast_completion_calculation = pd.DataFrame()
@@ -354,11 +359,24 @@ class WorkloadExcelReporter:
         setattr(processor, "demand_fte_calculation", calculation_df)
         return self.demand_fte_calculation
 
+    def format_rule_days(self, rule_days):
+        return ", ".join(
+            f"{case_type} T+{days}"
+            for case_type, days in rule_days.items()
+        )
+
     def build_output_excel_tables(self, cutoff_date=None, output_path=None, write_excel=True):
         processor = self.processor
         if cutoff_date is None:
             cutoff_date = processor.infer_actual_cutoff_date()
 
+        logger.info(
+            "Building Excel output tables | frequency=%s cutoff_date=%s write_excel=%s output_path=%s",
+            processor.frequency,
+            pd.to_datetime(cutoff_date).strftime("%Y-%m-%d") if pd.notna(cutoff_date) else None,
+            write_excel,
+            output_path or self.config["outputs"]["excel_path"],
+        )
         workload_df = processor.calculate_workload(cutoff_date=cutoff_date)
         metric_definitions = pd.DataFrame(processor.output_metric_definitions)
         metric_lookup = metric_definitions.set_index("Metric").to_dict("index")
@@ -380,8 +398,8 @@ class WorkloadExcelReporter:
                     "Item": "Actual Completion Status",
                     "Value": ", ".join(sorted(processor.actual_completion_status)),
                 },
-                {"Item": "WBH Letter Rule", "Value": "PR T+90, Trigger T+60"},
-                {"Item": "WBH Call Rule", "Value": "PR T+95, Trigger T+65"},
+                {"Item": "WBH Letter Rule", "Value": self.format_rule_days(processor.wbh_letter_days)},
+                {"Item": "WBH Call Rule", "Value": self.format_rule_days(processor.wbh_call_days)},
                 {"Item": "Completion UPT", "Value": processor.completion_upt},
                 {"Item": "Init UPT", "Value": processor.init_upt},
                 {"Item": "Working Hour", "Value": processor.working_hour},
@@ -499,6 +517,14 @@ class WorkloadExcelReporter:
 
         self.output_excel_tables = output_tables
         setattr(processor, "output_excel_tables", output_tables)
+        logger.info(
+            "Excel output tables built | frequency=%s table_rows=%s",
+            processor.frequency,
+            {
+                table_name: 0 if output_df is None else len(output_df)
+                for table_name, output_df in output_tables.items()
+            },
+        )
         if write_excel or output_path is not None:
             self.write_output_excel(output_path=output_path, output_tables=output_tables)
 
@@ -506,7 +532,7 @@ class WorkloadExcelReporter:
 
     def write_output_excel(self, output_path=None, output_tables=None):
         if output_path is None:
-            output_path = os.path.join("data", "Workload_Forecast_Output.xlsx")
+            output_path = self.config["outputs"]["excel_path"]
 
         output_dir = os.path.dirname(output_path)
         if output_dir:
@@ -518,6 +544,11 @@ class WorkloadExcelReporter:
         if not output_tables:
             raise ValueError("No output tables available. Run build_output_excel_tables first.")
 
+        logger.info(
+            "Writing Excel output | path=%s sheets=%d",
+            output_path,
+            len(output_tables),
+        )
         from openpyxl.styles import Alignment, Font, PatternFill
         from openpyxl.utils import get_column_letter
 
@@ -538,6 +569,10 @@ class WorkloadExcelReporter:
                 base_path, extension = os.path.splitext(output_path)
                 timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
                 output_path = f"{base_path}_{timestamp}{extension}"
+                logger.warning(
+                    "Excel output path locked; writing timestamped file | path=%s",
+                    output_path,
+                )
 
         with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
             for sheet_name, output_df in output_tables.items():
@@ -608,5 +643,10 @@ class WorkloadExcelReporter:
 
         self.output_excel_path = output_path
         setattr(self.processor, "output_excel_path", output_path)
+        logger.info(
+            "Excel output written | path=%s size_bytes=%d",
+            output_path,
+            os.path.getsize(output_path) if os.path.exists(output_path) else 0,
+        )
         return self.output_excel_path
 ```

@@ -1,4 +1,7 @@
 from datetime import datetime
+import logging
+import os
+import time
 
 import pandas as pd
 
@@ -8,13 +11,87 @@ from workload_html_report import WorkloadHtmlVisualizer
 from workload_excel_report import WorkloadExcelReporter
 
 
+HTML_FREQUENCY_ORDER = ("M", "W", "D")
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+LOG_FILE_PATH = os.path.join(PROJECT_ROOT, "workload_forecast.log")
+logger = logging.getLogger(__name__)
+
+
+def setup_logging(log_path=None, level=logging.INFO):
+    log_path = os.path.abspath(log_path or LOG_FILE_PATH)
+    log_dir = os.path.dirname(log_path)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+
+    has_log_handler = any(
+        isinstance(handler, logging.FileHandler)
+        and os.path.abspath(handler.baseFilename) == log_path
+        for handler in root_logger.handlers
+    )
+    if not has_log_handler:
+        handler = logging.FileHandler(log_path, encoding="utf-8")
+        handler.setLevel(level)
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+        ))
+        root_logger.addHandler(handler)
+
+    return log_path
+
+
+def get_html_frequencies(config):
+    frequency_days = config["run"]["frequency_days"]
+    configured_frequencies = list(frequency_days)
+
+    frequencies = [
+        frequency
+        for frequency in HTML_FREQUENCY_ORDER
+        if frequency in frequency_days
+    ]
+    frequencies.extend(
+        frequency
+        for frequency in configured_frequencies
+        if frequency not in frequencies
+    )
+    return frequencies
+
+
 def build_workload_processor(current_date, frequency, config=None):
+    start_time = time.perf_counter()
+    logger.info(
+        "Processor start | frequency=%s current_date=%s",
+        frequency,
+        pd.to_datetime(current_date).strftime("%Y-%m-%d"),
+    )
     processor = DataProcessor(pd.to_datetime(current_date), frequency, config=config)
-    processor.run()
+    try:
+        processor.run()
+    except Exception:
+        logger.exception("Processor failed | frequency=%s", frequency)
+        raise
+
+    period_count = 0
+    case_type_count = 0
+    if not processor.workload_volume.empty:
+        period_count = processor.workload_volume.index.get_level_values("Period").nunique()
+        case_type_count = processor.workload_volume.index.get_level_values("Case Type").nunique()
+    logger.info(
+        "Processor complete | frequency=%s elapsed_sec=%.2f workload_rows=%d periods=%d case_types=%d",
+        frequency,
+        time.perf_counter() - start_time,
+        len(processor.workload_volume),
+        period_count,
+        case_type_count,
+    )
     return processor
 
 
 def run_workload_forecast(current_date=None, frequency=None, output_path=None):
+    log_path = setup_logging()
+    start_time = time.perf_counter()
     if current_date is None:
         current_date = datetime.now()
 
@@ -22,47 +99,107 @@ def run_workload_forecast(current_date=None, frequency=None, output_path=None):
     if frequency is None:
         frequency = config["run"]["default_forecast_frequency"]
 
+    logger.info(
+        "Excel forecast run start | current_date=%s frequency=%s output_path=%s log_path=%s",
+        pd.to_datetime(current_date).strftime("%Y-%m-%d"),
+        frequency,
+        output_path or config["outputs"]["excel_path"],
+        log_path,
+    )
     processor = build_workload_processor(current_date, frequency, config=config)
     reporter = WorkloadExcelReporter(processor)
-    reporter.build_output_excel_tables(output_path=output_path)
+    try:
+        reporter.build_output_excel_tables(output_path=output_path)
+    except Exception:
+        logger.exception("Excel forecast run failed | frequency=%s", frequency)
+        raise
+
+    logger.info(
+        "Excel forecast run complete | frequency=%s output_path=%s elapsed_sec=%.2f",
+        frequency,
+        reporter.output_excel_path,
+        time.perf_counter() - start_time,
+    )
     return processor, reporter
 
 
 def run_workload_visualization(current_date=None, frequencies=None, output_path=None):
+    log_path = setup_logging()
+    start_time = time.perf_counter()
     if current_date is None:
         current_date = datetime.now()
 
     config = load_config()
     if frequencies is None:
-        frequencies = config["run"]["visualization_frequencies"]
+        frequencies = get_html_frequencies(config)
 
+    logger.info(
+        "HTML visualization run start | current_date=%s frequencies=%s output_path=%s log_path=%s",
+        pd.to_datetime(current_date).strftime("%Y-%m-%d"),
+        ",".join(frequencies),
+        output_path or config["outputs"]["html_path"],
+        log_path,
+    )
     processors_by_frequency = {
         frequency: build_workload_processor(current_date, frequency, config=config)
         for frequency in frequencies
     }
     visualizer = WorkloadHtmlVisualizer(processors_by_frequency, output_path=output_path)
-    visualizer.write_html()
+    try:
+        visualizer.write_html()
+    except Exception:
+        logger.exception("HTML visualization run failed | frequencies=%s", ",".join(frequencies))
+        raise
+
+    logger.info(
+        "HTML visualization run complete | output_path=%s frequencies=%s elapsed_sec=%.2f",
+        visualizer.output_path,
+        ",".join(visualizer.visualization_data.get("frequencies", {}).keys()),
+        time.perf_counter() - start_time,
+    )
     return visualizer
 
 
 def main():
+    log_path = setup_logging()
+    start_time = time.perf_counter()
     config = load_config()
     run_date = datetime.now()
     default_frequency = config["run"]["default_forecast_frequency"]
-    default_processor = build_workload_processor(run_date, default_frequency, config=config)
+    html_frequencies = get_html_frequencies(config)
+    logger.info(
+        "Workload forecast main start | current_date=%s default_frequency=%s html_frequencies=%s log_path=%s",
+        pd.to_datetime(run_date).strftime("%Y-%m-%d"),
+        default_frequency,
+        ",".join(html_frequencies),
+        log_path,
+    )
 
-    excel_reporter = WorkloadExcelReporter(default_processor)
-    excel_reporter.build_output_excel_tables()
-    print(f"Output Excel written to: {excel_reporter.output_excel_path}")
+    try:
+        default_processor = build_workload_processor(run_date, default_frequency, config=config)
 
-    processors = {default_frequency: default_processor}
-    for frequency in config["run"]["visualization_frequencies"]:
-        if frequency not in processors:
-            processors[frequency] = build_workload_processor(run_date, frequency, config=config)
+        excel_reporter = WorkloadExcelReporter(default_processor)
+        excel_reporter.build_output_excel_tables()
+        print(f"Output Excel written to: {excel_reporter.output_excel_path}")
 
-    html_visualizer = WorkloadHtmlVisualizer(processors)
-    html_visualizer.write_html()
-    print(f"Output HTML written to: {html_visualizer.output_path}")
+        processors = {default_frequency: default_processor}
+        for frequency in html_frequencies:
+            if frequency not in processors:
+                processors[frequency] = build_workload_processor(run_date, frequency, config=config)
+
+        html_visualizer = WorkloadHtmlVisualizer(processors)
+        html_visualizer.write_html()
+        print(f"Output HTML written to: {html_visualizer.output_path}")
+    except Exception:
+        logger.exception("Workload forecast main failed")
+        raise
+
+    logger.info(
+        "Workload forecast main complete | excel_path=%s html_path=%s elapsed_sec=%.2f",
+        excel_reporter.output_excel_path,
+        html_visualizer.output_path,
+        time.perf_counter() - start_time,
+    )
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 
 import numpy as np
@@ -6,6 +7,8 @@ import pandas as pd
 
 from config_loader import load_config
 from workload_excel_report import WorkloadExcelReporter
+
+logger = logging.getLogger(__name__)
 
 
 class WorkloadHtmlVisualizer:
@@ -73,7 +76,13 @@ class WorkloadHtmlVisualizer:
         frequencies = {}
         metric_definitions = None
 
+        logger.info(
+            "Building HTML visualization data | frequencies=%s max_detail_rows=%d",
+            ",".join(self.processors_by_frequency.keys()),
+            self.max_detail_rows,
+        )
         for frequency, processor in self.processors_by_frequency.items():
+            logger.info("Building HTML frequency payload | frequency=%s", frequency)
             reporter = WorkloadExcelReporter(processor)
             output_tables = reporter.build_output_excel_tables(write_excel=False)
             output_tables["40_Calc_Forecast_Completion"] = (
@@ -91,6 +100,14 @@ class WorkloadHtmlVisualizer:
                 processor,
                 output_tables
             )
+            logger.info(
+                "HTML frequency payload built | frequency=%s workload_rows=%d periods=%d case_types=%d detail_tables=%d",
+                frequency,
+                len(frequencies[frequency]["workload"]),
+                len(frequencies[frequency]["periods"]),
+                len(frequencies[frequency]["caseTypes"]),
+                len(frequencies[frequency]["details"]),
+            )
 
         self.visualization_data = {
             "title": "CDD Workload Forecast",
@@ -100,6 +117,10 @@ class WorkloadHtmlVisualizer:
             "frequencyLabels": self.FREQUENCY_LABELS,
             "frequencies": frequencies,
         }
+        logger.info(
+            "HTML visualization data built | frequencies=%s",
+            ",".join(frequencies.keys()),
+        )
         return self.visualization_data
 
     def build_frequency_payload(self, frequency, processor, output_tables):
@@ -134,6 +155,17 @@ class WorkloadHtmlVisualizer:
             for _, row in control_table.iterrows():
                 control[str(row["Item"])] = self.clean_value(row["Value"])
 
+        logger.info(
+            "HTML payload summary | frequency=%s workload_rows=%d periods=%d case_types=%d detail_rows=%s",
+            frequency,
+            len(workload_long),
+            len(periods),
+            len(case_types),
+            {
+                table_name: counts.get("totalRows", 0)
+                for table_name, counts in detail_counts.items()
+            },
+        )
         return {
             "frequency": frequency,
             "label": self.FREQUENCY_LABELS.get(frequency, frequency),
@@ -1325,6 +1357,7 @@ class WorkloadHtmlVisualizer:
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
 
+        logger.info("Writing HTML output | path=%s", self.output_path)
         try:
             with open(self.output_path, "w", encoding="utf-8") as html_file:
                 html_file.write(self.build_html())
@@ -1332,7 +1365,17 @@ class WorkloadHtmlVisualizer:
             base_path, extension = os.path.splitext(self.output_path)
             timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
             self.output_path = f"{base_path}_{timestamp}{extension}"
+            logger.warning(
+                "HTML output path locked; writing timestamped file | path=%s",
+                self.output_path,
+            )
             with open(self.output_path, "w", encoding="utf-8") as html_file:
                 html_file.write(self.build_html())
 
+        logger.info(
+            "HTML output written | path=%s size_bytes=%d frequencies=%s",
+            self.output_path,
+            os.path.getsize(self.output_path) if os.path.exists(self.output_path) else 0,
+            ",".join(self.visualization_data.get("frequencies", {}).keys()),
+        )
         return self.output_path

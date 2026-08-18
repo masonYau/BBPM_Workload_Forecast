@@ -12,3 +12,4 @@ __pycache__/
 data/Workload_Forecast_Output*.xlsx
 data/Workload_Forecast_Visualization*.html
 data/data/
+workload_forecast.log

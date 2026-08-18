@@ -9,30 +9,26 @@ import logging
 import numpy as np
 import math
 import os
+import time
+from config_loader import load_config
+
+logger = logging.getLogger(__name__)
+
 
 class DataProcessor:
 
-    def __init__(self, current_date: pd.Timestamp, frequency: str):
+    def __init__(self, current_date: pd.Timestamp, frequency: str, config=None):
 
+        self.config = config or load_config()
+        input_config = self.config["inputs"]
+        run_config = self.config["run"]
+        business_rules = self.config["business_rules"]
         self.master_df = pd.DataFrame()
-        self.comple_status = {'E2E Completed', 'ReCompleted - WBH'}
-        self.wbh_status = {
-            'E2E Completed': 'Completed',
-            'WBH Imposed': 'WBH',
-            'ReCompleted - WBH': 'Completed',
-            'Cancelled - All AC Closed': 'Completed',
-            'CSEM': 'Completed',
-            'Cancelled - KPMG Managed': 'Cancelled',
-            'Cancelled - RM Managed': 'Cancelled',
-            'IN_PROGRESS': 'WIP',
-            'Cancelled - 2nd AC Opening under NTB': 'Cancelled',
-            'Cancelled - AC re-opened under NTB': 'Cancelled',
-            'Pending BA Approval': 'WIP',
-            'Not Loading': 'Not Initiated'
-        }
+        self.comple_status = set(business_rules["completed_source_statuses"])
+        self.wbh_status = dict(business_rules["status_mapping"])
         self.current_date = current_date
         self.frequency = frequency
-        self.frequency_days = {"D": 1, "W": 7, "M": 30}
+        self.frequency_days = dict(run_config["frequency_days"])
         self.completion_distribution = pd.Series()
         self.input_bow_volume = pd.Series()
         self.bow_volume = pd.Series()
@@ -50,20 +46,14 @@ class DataProcessor:
         self.remaining_bow_volume = pd.DataFrame()
         self.actual_cutoff_date = pd.NaT
         self.remaining_bow_cutoff_date = pd.NaT
-        self.actual_start_status = {'Completed', 'WBH', 'Cancelled', 'WIP'}
-        self.open_start_status = {'WBH', 'WIP', 'Not Initiated'}
-        self.actual_completion_status = {'Completed'}
-        self.wbh_letter_days = {
-            "PR": 90,
-            "Trigger": 60,
-        }
-        self.wbh_call_days = {
-            "PR": 95,
-            "Trigger": 65,
-        }
-        self.completion_upt = 4.5
-        self.init_upt = 0.5
-        self.working_hour = 129
+        self.actual_start_status = set(business_rules["actual_start_statuses"])
+        self.open_start_status = set(business_rules["open_start_statuses"])
+        self.actual_completion_status = set(business_rules["actual_completion_statuses"])
+        self.wbh_letter_days = dict(business_rules["wbh_letter_days"])
+        self.wbh_call_days = dict(business_rules["wbh_call_days"])
+        self.completion_upt = business_rules["completion_upt"]
+        self.init_upt = business_rules["init_upt"]
+        self.working_hour = business_rules["working_hour"]
         self.output_metric_definitions = [
             {
                 "Category": "Start Pipeline",
@@ -175,43 +165,190 @@ class DataProcessor:
             },
         ]
 
-        self.input_completion_percentage_config = {
-            "file_path": "Input_Completion_Percentage.xlsx",
-            "sheet_names": None,
-            "period_column": "Month",
-            "percentage_column": "Percentage",
-            "frequency": "M",
-        }
+        self.input_completion_percentage_config = dict(input_config["completion_percentage"])
+        self.input_bow_volume_config = dict(input_config["bow_volume"])
+        self.input_tracker_config = dict(input_config["tracker"])
+        self.read_completion_percentage_from_input = business_rules["read_completion_percentage_from_input"]
+        self.logged_summary_keys = set()
 
-        self.input_bow_volume_config = {
-            "file_path": "Input_BoW_Volume.xlsx",
-            "sheet_names": None,
-            "period_column": "Month",
-            "volume_column": "Volume",
-            "frequency": "M",
+    def period_summary(self, data):
+        if data is None or len(data) == 0:
+            return 0, None, None
+
+        periods = None
+        if isinstance(data.index, pd.MultiIndex):
+            for level_name in ("Period", "Start Period", "Input Period"):
+                if level_name in data.index.names:
+                    periods = data.index.get_level_values(level_name)
+                    break
+        elif isinstance(data.index, pd.PeriodIndex):
+            periods = data.index
+        elif isinstance(data, pd.DataFrame):
+            for column in ("Period", "Start Period", "Input Period"):
+                if column in data.columns:
+                    periods = data[column]
+                    break
+
+        if periods is None:
+            return 0, None, None
+
+        period_values = sorted({str(period) for period in periods if pd.notna(period)})
+        if not period_values:
+            return 0, None, None
+        return len(period_values), period_values[0], period_values[-1]
+
+    def case_type_count(self, data):
+        if data is None or len(data) == 0:
+            return 0
+        if isinstance(data.index, pd.MultiIndex) and "Case Type" in data.index.names:
+            return data.index.get_level_values("Case Type").nunique()
+        if isinstance(data, pd.DataFrame) and "Case Type" in data.columns:
+            return data["Case Type"].nunique()
+        return 0
+
+    def numeric_total(self, data):
+        if data is None or len(data) == 0:
+            return 0.0
+        if isinstance(data, pd.Series):
+            return float(pd.to_numeric(data, errors="coerce").fillna(0).sum())
+
+        numeric_data = data.select_dtypes(include=[np.number])
+        if numeric_data.empty:
+            return 0.0
+        return float(numeric_data.sum().sum())
+
+    def log_series_summary(self, label, series):
+        period_count, period_start, period_end = self.period_summary(series)
+        total = round(self.numeric_total(series), 2)
+        summary_key = (
+            label,
+            self.frequency,
+            0 if series is None else len(series),
+            period_count,
+            period_start,
+            period_end,
+            self.case_type_count(series),
+            total,
+        )
+        if summary_key in self.logged_summary_keys:
+            return
+        self.logged_summary_keys.add(summary_key)
+
+        logger.info(
+            "%s summary | frequency=%s rows=%d periods=%d period_start=%s period_end=%s case_types=%d total=%.2f",
+            label,
+            self.frequency,
+            0 if series is None else len(series),
+            period_count,
+            period_start,
+            period_end,
+            self.case_type_count(series),
+            total,
+        )
+
+    def log_workload_summary(self):
+        if self.workload_volume.empty:
+            logger.warning("Workload summary | frequency=%s rows=0", self.frequency)
+            return
+
+        period_count, period_start, period_end = self.period_summary(self.workload_volume)
+        metrics = [
+            "Planned Start Volume",
+            "Received Start Volume",
+            "Actual Completion Volume",
+            "Forecast Completion Volume",
+            "Demand FTE",
+        ]
+        totals = {
+            metric: round(float(pd.to_numeric(self.workload_volume[metric], errors="coerce").fillna(0).sum()), 2)
+            for metric in metrics
+            if metric in self.workload_volume.columns
         }
-        self.input_tracker_config = {
-            "file_path": "BBPM Case tracker(Updated) - *.xlsm",
-            "sheet_name": "Master File"
-        }
-        self.read_completion_percentage_from_input = True
+        summary_key = (
+            "Workload summary",
+            self.frequency,
+            len(self.workload_volume),
+            period_count,
+            period_start,
+            period_end,
+            self.case_type_count(self.workload_volume),
+            tuple(sorted(totals.items())),
+        )
+        if summary_key in self.logged_summary_keys:
+            return
+        self.logged_summary_keys.add(summary_key)
+
+        logger.info(
+            "Workload summary | frequency=%s rows=%d periods=%d period_start=%s period_end=%s case_types=%d totals=%s",
+            self.frequency,
+            len(self.workload_volume),
+            period_count,
+            period_start,
+            period_end,
+            self.case_type_count(self.workload_volume),
+            totals,
+        )
 
     def read_data(self):
         from glob import glob
 
-        tracker_path_pattern = self.input_tracker_config["file_path"]
+        tracker_path_pattern = self.resolve_input_file_pattern(self.input_tracker_config["file_path"])
         sheet_name = self.input_tracker_config["sheet_name"]
+        skiprows = self.input_tracker_config.get("skiprows")
 
         matches = glob(tracker_path_pattern)
         if not matches:
+            logger.error(
+                "Case tracker not found | frequency=%s pattern=%s",
+                self.frequency,
+                tracker_path_pattern,
+            )
             raise FileNotFoundError(f"No headcount files matched: {tracker_path_pattern}")
 
         tracker_path = max(matches, key=os.path.getmtime)
-        print(f"Loading case tracker: {tracker_path}")
-        master_df = pd.read_excel(tracker_path, sheet_name=sheet_name, skiprows=1)
+        logger.info(
+            "Reading case tracker | frequency=%s file=%s sheet=%s skiprows=%s matched_files=%d",
+            self.frequency,
+            tracker_path,
+            sheet_name,
+            skiprows,
+            len(matches),
+        )
+        master_df = pd.read_excel(tracker_path, sheet_name=sheet_name, skiprows=skiprows)
+        required_columns = [mh.CIN, mh.OriginalT0, mh.ReviewType, mh.TaskStatus, mh.ApprovalCancelDate]
+        missing_columns = [column for column in required_columns if column not in master_df.columns]
+        if missing_columns:
+            logger.error(
+                "Case tracker missing required columns | frequency=%s missing_columns=%s",
+                self.frequency,
+                missing_columns,
+            )
+
         master_df[mh.CIN] = master_df[mh.CIN].astype(str).apply(lambda x: x.lstrip('0'))
         master_df[mh.OriginalT0] = pd.to_datetime(master_df[mh.OriginalT0])
         master_df[mh.ReviewType] = master_df[mh.ReviewType].apply(lambda x: "PR" if "PR" in x else "Trigger")
+        unknown_statuses = master_df.loc[
+            master_df[mh.TaskStatus].map(self.wbh_status).isna(),
+            mh.TaskStatus,
+        ].dropna().astype(str).unique()
+        if len(unknown_statuses) > 0:
+            logger.warning(
+                "Unknown task statuses found | frequency=%s count=%d statuses=%s",
+                self.frequency,
+                len(unknown_statuses),
+                sorted(unknown_statuses),
+            )
+
+        original_t0 = pd.to_datetime(master_df[mh.OriginalT0], errors="coerce").dropna()
+        logger.info(
+            "Case tracker loaded | frequency=%s rows=%d columns=%d original_t0_start=%s original_t0_end=%s review_type_counts=%s",
+            self.frequency,
+            len(master_df),
+            len(master_df.columns),
+            original_t0.min().strftime("%Y-%m-%d") if not original_t0.empty else None,
+            original_t0.max().strftime("%Y-%m-%d") if not original_t0.empty else None,
+            master_df[mh.ReviewType].value_counts(dropna=False).to_dict(),
+        )
         self.master_df = master_df
 
 
@@ -238,16 +375,32 @@ class DataProcessor:
         sample_df = sample_df[sample_df["Status"] != "WIP"]
 
         self.completion_distribution = sample_df.groupby(['Status', "N Period"])[mh.CIN].count() / len(sample_df)
+        logger.info(
+            "Completion distribution calculated from tracker | frequency=%s sample_rows=%d distribution_points=%d",
+            self.frequency,
+            len(sample_df),
+            len(self.completion_distribution),
+        )
 
     def read_input_completion_percentage(self):
         config = self.input_completion_percentage_config
         completion_distributions = {}
+        source_rows = 0
+        loaded_case_types = []
+        logger.info(
+            "Reading completion percentage input | frequency=%s source_frequency=%s file=%s",
+            self.frequency,
+            config["frequency"],
+            self.resolve_input_file_path(config["file_path"]),
+        )
 
         for case_type, input_df in self.read_case_type_input_sheets(config):
             input_df = input_df[[config["period_column"], config["percentage_column"]]].dropna()
             input_df[config["period_column"]] = pd.to_numeric(input_df[config["period_column"]], errors="coerce")
             input_df[config["percentage_column"]] = pd.to_numeric(input_df[config["percentage_column"]], errors="coerce")
             input_df = input_df.dropna()
+            source_rows += len(input_df)
+            loaded_case_types.append(case_type)
 
             completion_distribution = input_df.groupby(config["period_column"])[config["percentage_column"]].sum()
             completion_distribution.index = completion_distribution.index.astype(int)
@@ -267,6 +420,22 @@ class DataProcessor:
             self.completion_distribution.index = pd.MultiIndex.from_tuples(
                 self.completion_distribution.index,
                 names=["Case Type", "N Period"]
+            )
+        if self.completion_distribution.empty:
+            logger.warning(
+                "Completion percentage input produced no distribution | frequency=%s source_rows=%d",
+                self.frequency,
+                source_rows,
+            )
+        else:
+            probability_totals = self.completion_distribution.groupby(level="Case Type").sum().round(4).to_dict()
+            logger.info(
+                "Completion percentage input loaded | frequency=%s source_rows=%d distribution_points=%d case_types=%s probability_totals=%s",
+                self.frequency,
+                source_rows,
+                len(self.completion_distribution),
+                sorted(set(loaded_case_types)),
+                probability_totals,
             )
         return self.completion_distribution
 
@@ -300,12 +469,22 @@ class DataProcessor:
         config = self.input_bow_volume_config
         input_bow_volume = {}
         output_bow_volume = {}
+        source_rows = 0
+        loaded_case_types = []
+        logger.info(
+            "Reading BoW input | frequency=%s source_frequency=%s file=%s",
+            self.frequency,
+            config["frequency"],
+            self.resolve_input_file_path(config["file_path"]),
+        )
 
         for case_type, input_df in self.read_case_type_input_sheets(config):
             input_df = input_df[[config["period_column"], config["volume_column"]]].dropna()
             input_df[config["period_column"]] = pd.to_datetime(input_df[config["period_column"]], errors="coerce")
             input_df[config["volume_column"]] = pd.to_numeric(input_df[config["volume_column"]], errors="coerce")
             input_df = input_df.dropna()
+            source_rows += len(input_df)
+            loaded_case_types.append(case_type)
 
             bow_volume = input_df.groupby(config["period_column"])[config["volume_column"]].sum()
             bow_volume.index = pd.to_datetime(bow_volume.index).to_period(config["frequency"])
@@ -338,6 +517,16 @@ class DataProcessor:
                 names=["Case Type", "Period"]
             )
         self.bow_volume.name = "BoW Volume"
+        logger.info(
+            "BoW input loaded | frequency=%s source_rows=%d case_types=%s input_points=%d output_points=%d input_total=%.2f output_total=%.2f",
+            self.frequency,
+            source_rows,
+            sorted(set(loaded_case_types)),
+            len(self.input_bow_volume),
+            len(self.bow_volume),
+            self.numeric_total(self.input_bow_volume),
+            self.numeric_total(self.bow_volume),
+        )
         return self.bow_volume
 
     def convert_bow_volume_frequency(self, bow_volume: pd.Series, input_frequency: str):
@@ -378,6 +567,18 @@ class DataProcessor:
 
         return file_path
 
+    def resolve_input_file_pattern(self, file_path_pattern):
+        from glob import glob
+
+        if glob(file_path_pattern):
+            return file_path_pattern
+
+        data_file_path_pattern = os.path.join("data", file_path_pattern)
+        if glob(data_file_path_pattern):
+            return data_file_path_pattern
+
+        return file_path_pattern
+
     def read_case_type_input_sheets(self, config):
         file_path = self.resolve_input_file_path(config["file_path"])
         excel_file = pd.ExcelFile(file_path)
@@ -387,6 +588,12 @@ class DataProcessor:
         elif isinstance(sheet_names, str):
             sheet_names = [sheet_names]
 
+        logger.info(
+            "Reading input workbook | frequency=%s file=%s sheets=%s",
+            self.frequency,
+            file_path,
+            sheet_names,
+        )
         for sheet_name in sheet_names:
             input_df = pd.read_excel(file_path, sheet_name=sheet_name)
             required_columns = {config["period_column"]}
@@ -396,12 +603,33 @@ class DataProcessor:
                 required_columns.add(config["volume_column"])
 
             if not required_columns.issubset(input_df.columns):
+                logger.warning(
+                    "Skipping input sheet missing columns | frequency=%s file=%s sheet=%s missing_columns=%s",
+                    self.frequency,
+                    file_path,
+                    sheet_name,
+                    sorted(required_columns - set(input_df.columns)),
+                )
                 continue
 
             input_df = input_df.dropna(how="all")
             if input_df.empty:
+                logger.warning(
+                    "Skipping empty input sheet | frequency=%s file=%s sheet=%s",
+                    self.frequency,
+                    file_path,
+                    sheet_name,
+                )
                 continue
 
+            logger.info(
+                "Loaded input sheet | frequency=%s file=%s sheet=%s rows=%d columns=%d",
+                self.frequency,
+                file_path,
+                sheet_name,
+                len(input_df),
+                len(input_df.columns),
+            )
             yield sheet_name, input_df
 
     def get_current_cutoff_date(self):
@@ -457,6 +685,7 @@ class DataProcessor:
             self.received_volume = received_df.groupby([mh.ReviewType, "Period"]).size()
             self.received_volume.index = self.received_volume.index.set_names(["Case Type", "Period"])
         self.received_volume.name = "Received Volume"
+        self.log_series_summary("Received volume", self.received_volume)
         return self.received_volume
 
     def calculate_actual_start_volume(self, cutoff_date=None):
@@ -490,6 +719,7 @@ class DataProcessor:
             self.actual_start_volume.index = self.actual_start_volume.index.set_names(["Case Type", "Period"])
 
         self.actual_start_volume.name = "Actual Start Volume"
+        self.log_series_summary("Actual start volume", self.actual_start_volume)
         return self.actual_start_volume
 
     def calculate_open_received_start_volume(self, cutoff_date=None):
@@ -523,6 +753,7 @@ class DataProcessor:
             self.open_received_start_volume.index = self.open_received_start_volume.index.set_names(["Case Type", "Start Period"])
 
         self.open_received_start_volume.name = "WIP Received Start Volume"
+        self.log_series_summary("WIP received start volume", self.open_received_start_volume)
         return self.open_received_start_volume
 
     def calculate_actual_completion_volume(self, cutoff_date=None):
@@ -559,6 +790,7 @@ class DataProcessor:
             self.actual_completion_volume.index = self.actual_completion_volume.index.set_names(["Case Type", "Period"])
 
         self.actual_completion_volume.name = "Actual Completion Volume"
+        self.log_series_summary("Actual completion volume", self.actual_completion_volume)
         return self.actual_completion_volume
 
     def get_case_completion_distribution(self, case_type):
@@ -697,6 +929,12 @@ class DataProcessor:
         self.forecast_wbh_letter_volume = wbh_letter_df["Forecast WBH Letter Volume"]
         self.forecast_wbh_letter_volume.name = "Forecast WBH Letter Volume"
         self.wbh_letter_volume = wbh_letter_df
+        logger.info(
+            "WBH letter summary | frequency=%s rows=%d total=%.2f",
+            self.frequency,
+            len(self.wbh_letter_volume),
+            float(pd.to_numeric(self.forecast_wbh_letter_volume, errors="coerce").fillna(0).sum()),
+        )
         return self.wbh_letter_volume
 
     def add_wbh_call_volume(self, wbh_call_volume, case_type, start_period, start_volume, source,
@@ -800,6 +1038,12 @@ class DataProcessor:
         self.forecast_wbh_call_volume = wbh_call_df["Forecast WBH Call Volume"]
         self.forecast_wbh_call_volume.name = "Forecast WBH Call Volume"
         self.wbh_call_volume = wbh_call_df
+        logger.info(
+            "WBH call summary | frequency=%s rows=%d total=%.2f",
+            self.frequency,
+            len(self.wbh_call_volume),
+            float(pd.to_numeric(self.forecast_wbh_call_volume, errors="coerce").fillna(0).sum()),
+        )
         return self.wbh_call_volume
 
     def add_forecast_completion_volume(self, forecast_completion_volume, case_type, start_period, start_volume,
@@ -888,6 +1132,13 @@ class DataProcessor:
         completion_df["Actual Completion Volume"] = self.actual_completion_volume.reindex(periods, fill_value=0)
 
         self.completion_volume = completion_df
+        logger.info(
+            "Completion volume summary | frequency=%s rows=%d forecast_total=%.2f actual_total=%.2f",
+            self.frequency,
+            len(self.completion_volume),
+            float(pd.to_numeric(self.completion_volume["Forecast Completion Volume"], errors="coerce").fillna(0).sum()),
+            float(pd.to_numeric(self.completion_volume["Actual Completion Volume"], errors="coerce").fillna(0).sum()),
+        )
         return self.completion_volume
 
     def calculate_remaining_bow_volume(self):
@@ -964,6 +1215,15 @@ class DataProcessor:
         ).clip(lower=0)
 
         self.remaining_bow_volume = remaining_df
+        logger.info(
+            "Remaining BoW summary | frequency=%s rows=%d input_total=%.2f received_total=%.2f remaining_total=%.2f over_received_total=%.2f",
+            self.frequency,
+            len(self.remaining_bow_volume),
+            float(pd.to_numeric(self.remaining_bow_volume["Input BoW Volume"], errors="coerce").fillna(0).sum()),
+            float(pd.to_numeric(self.remaining_bow_volume["Received Volume"], errors="coerce").fillna(0).sum()),
+            float(pd.to_numeric(self.remaining_bow_volume["Remaining BoW Volume"], errors="coerce").fillna(0).sum()),
+            float(pd.to_numeric(self.remaining_bow_volume["Over Received Volume"], errors="coerce").fillna(0).sum()),
+        )
         return self.remaining_bow_volume
 
 
@@ -1058,9 +1318,16 @@ class DataProcessor:
             ) / self.working_hour
 
         self.workload_volume = workload_df
+        self.log_workload_summary()
         return self.workload_volume
 
     def run(self):
+        start_time = time.perf_counter()
+        logger.info(
+            "Data processor run start | frequency=%s current_date=%s",
+            self.frequency,
+            pd.to_datetime(self.current_date).strftime("%Y-%m-%d"),
+        )
         self.read_data()
         if self.read_completion_percentage_from_input:
             self.read_input_completion_percentage()
@@ -1073,4 +1340,9 @@ class DataProcessor:
         self.calculate_wbh_letter_volume()
         self.calculate_wbh_call_volume()
         self.calculate_workload()
+        logger.info(
+            "Data processor run complete | frequency=%s elapsed_sec=%.2f",
+            self.frequency,
+            time.perf_counter() - start_time,
+        )
 ```
