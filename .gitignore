@@ -3,4 +3,12 @@ __pycache__/
 
 # Local editor and Office temp files
 .vscode/
+.idea/
 ~$*.xlsx
+~$*.xlsm
+
+# Generated reports and packages
+*.zip
+data/Workload_Forecast_Output*.xlsx
+data/Workload_Forecast_Visualization*.html
+data/data/
