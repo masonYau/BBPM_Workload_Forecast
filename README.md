@@ -28,7 +28,7 @@ Generated files / 生成文件：
 | --- | --- |
 | `data/Workload_Forecast_Output.xlsx` | Excel forecast output. / Excel 预测结果。 |
 | `data/Workload_Forecast_Visualization.html` | Interactive HTML visualization. / 交互式 HTML 可视化。 |
-| `workload_forecast.log` | Local run log in the project root. The same log messages are also printed to the terminal while running. / 项目根目录下的本地运行日志。运行时同一批日志也会打印到终端。 |
+| `mi.log` | Local run log path configured by `outputs.log_path`. The same log messages are also printed to the terminal while running. / 由 `outputs.log_path` 配置的本地运行日志路径。运行时同一批日志也会打印到终端。 |
 
 ## Configuration File / 配置文件
 
@@ -169,6 +169,7 @@ These parameters set the day thresholds for forecasting WBH letter and call work
 | --- | --- | --- |
 | `outputs.excel_path` | `data/Workload_Forecast_Output.xlsx` | Default Excel output path. If the file is locked, the program writes a timestamped fallback file. / 默认 Excel 输出路径。如果文件被占用，程序会写出带时间戳的备用文件。 |
 | `outputs.html_path` | `data/Workload_Forecast_Visualization.html` | Default HTML visualization output path. If the file is locked, the program writes a timestamped fallback file. / 默认 HTML 可视化输出路径。如果文件被占用，程序会写出带时间戳的备用文件。 |
+| `outputs.log_path` | `./mi.log` | Log output path. It controls the file log location; the same log messages are also printed to the terminal. Relative paths are resolved from the current working directory. / 日志输出路径。它控制文件日志位置；同一批日志也会打印到终端。相对路径按当前运行目录解析。 |
 
 ## Python Entry Parameters / Python 入口函数参数
 
@@ -178,7 +179,7 @@ These parameters are used when calling functions from Python instead of running 
 
 | Function / 函数 | Parameter / 参数 | Default / 默认值 | Function and impact / 作用和影响 |
 | --- | --- | --- | --- |
-| `setup_logging` | `log_path` | `workload_forecast.log` | Sets the log output file path. The default writes to the project root. / 设置日志输出文件路径。默认写到项目根目录。 |
+| `setup_logging` | `log_path` | `outputs.log_path` | Overrides the configured log output file path when provided. / 传入时覆盖配置中的日志输出路径。 |
 | `setup_logging` | `level` | `logging.INFO` | Sets minimum log level for both file and terminal logs. Lower levels such as `DEBUG` can produce more detail; higher levels such as `WARNING` reduce routine progress logs. / 同时设置文件日志和终端日志的最低级别。较低级别如 `DEBUG` 会输出更多细节，较高级别如 `WARNING` 会减少常规进度日志。 |
 | `build_workload_processor` | `current_date` | Required / 必填 | Sets the current/cutoff date used by one processor. / 设置单个处理器使用的当前日期和截断日期。 |
 | `build_workload_processor` | `frequency` | Required / 必填 | Sets the output frequency for one processor. It must exist in `run.frequency_days`. / 设置单个处理器的输出颗粒度，必须存在于 `run.frequency_days`。 |

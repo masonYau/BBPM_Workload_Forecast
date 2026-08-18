@@ -17,12 +17,19 @@ HTML_FREQUENCY_ORDER = ("M", "W", "D")
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE_PATH = os.path.join(PROJECT_ROOT, "workload_forecast.log")
 LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+FILE_HANDLER_MARKER = "_workload_forecast_file_handler"
 CONSOLE_HANDLER_MARKER = "_workload_forecast_console_handler"
 logger = logging.getLogger(__name__)
 
 
-def setup_logging(log_path=None, level=logging.INFO):
-    log_path = os.path.abspath(log_path or LOG_FILE_PATH)
+def get_log_path(config=None):
+    if config:
+        return config.get("outputs", {}).get("log_path") or LOG_FILE_PATH
+    return LOG_FILE_PATH
+
+
+def setup_logging(log_path=None, level=logging.INFO, config=None):
+    log_path = os.path.abspath(log_path or get_log_path(config))
     log_dir = os.path.dirname(log_path)
     if log_dir:
         os.makedirs(log_dir, exist_ok=True)
@@ -30,6 +37,14 @@ def setup_logging(log_path=None, level=logging.INFO):
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
     formatter = logging.Formatter(LOG_FORMAT)
+
+    for handler in list(root_logger.handlers):
+        if (
+            getattr(handler, FILE_HANDLER_MARKER, False)
+            and os.path.abspath(handler.baseFilename) != log_path
+        ):
+            root_logger.removeHandler(handler)
+            handler.close()
 
     has_log_handler = any(
         isinstance(handler, logging.FileHandler)
@@ -40,6 +55,7 @@ def setup_logging(log_path=None, level=logging.INFO):
         handler = logging.FileHandler(log_path, encoding="utf-8")
         handler.setLevel(level)
         handler.setFormatter(formatter)
+        setattr(handler, FILE_HANDLER_MARKER, True)
         root_logger.addHandler(handler)
 
     has_console_handler = any(
@@ -74,7 +90,9 @@ def get_html_frequencies(config):
 
 
 def build_workload_processor(current_date, frequency, config=None):
-    setup_logging()
+    if config is None:
+        config = load_config()
+    setup_logging(config=config)
     start_time = time.perf_counter()
     logger.info(
         "Processor start | frequency=%s current_date=%s",
@@ -105,12 +123,12 @@ def build_workload_processor(current_date, frequency, config=None):
 
 
 def run_workload_forecast(current_date=None, frequency=None, output_path=None, config_path=None):
-    log_path = setup_logging()
     start_time = time.perf_counter()
     if current_date is None:
         current_date = datetime.now()
 
     config = load_config(config_path)
+    log_path = setup_logging(config=config)
     if frequency is None:
         frequency = config["run"]["default_forecast_frequency"]
 
@@ -140,12 +158,12 @@ def run_workload_forecast(current_date=None, frequency=None, output_path=None, c
 
 
 def run_workload_visualization(current_date=None, frequencies=None, output_path=None, config_path=None):
-    log_path = setup_logging()
     start_time = time.perf_counter()
     if current_date is None:
         current_date = datetime.now()
 
     config = load_config(config_path)
+    log_path = setup_logging(config=config)
     if frequencies is None:
         frequencies = get_html_frequencies(config)
 
@@ -178,9 +196,9 @@ def run_workload_visualization(current_date=None, frequencies=None, output_path=
 
 
 def main(config_path=None):
-    log_path = setup_logging()
     start_time = time.perf_counter()
     config = load_config(config_path)
+    log_path = setup_logging(config=config)
     run_date = datetime.now()
     default_frequency = config["run"]["default_forecast_frequency"]
     html_frequencies = get_html_frequencies(config)

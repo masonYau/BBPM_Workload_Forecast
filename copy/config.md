@@ -66,7 +66,8 @@
   },
   "outputs": {
     "excel_path": "data/Workload_Forecast_Output.xlsx",
-    "html_path": "data/Workload_Forecast_Visualization.html"
+    "html_path": "data/Workload_Forecast_Visualization.html",
+    "log_path": "./mi.log"
   }
 }
 ```
