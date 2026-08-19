@@ -35,6 +35,7 @@ class DataProcessor:
         self.received_volume = pd.Series()
         self.actual_start_volume = pd.Series()
         self.open_received_start_volume = pd.Series()
+        self.pending_qc_ba_volume = pd.Series()
         self.forecast_completion_volume = pd.Series()
         self.actual_completion_volume = pd.Series()
         self.forecast_wbh_letter_volume = pd.Series()
@@ -48,6 +49,7 @@ class DataProcessor:
         self.remaining_bow_cutoff_date = pd.NaT
         self.actual_start_status = set(business_rules["actual_start_statuses"])
         self.open_start_status = set(business_rules["open_start_statuses"])
+        self.pending_qc_ba_status = set(business_rules.get("pending_qc_ba_statuses", ["Pending QC/BA"]))
         self.actual_completion_status = set(business_rules["actual_completion_statuses"])
         self.wbh_letter_days = dict(business_rules["wbh_letter_days"])
         self.wbh_call_days = dict(business_rules["wbh_call_days"])
@@ -79,7 +81,16 @@ class DataProcessor:
                 "Metric": "WIP Received Start Volume",
                 "Display Name": "WIP Received Start Volume",
                 "Source": "Master File",
-                "Logic": "Received cases still WIP after excluding completed and cancelled status.",
+                "Logic": "Received cases still open after excluding completed and cancelled/closed status.",
+                "Cutoff": "BoW cutoff",
+            },
+            {
+                "Category": "Start Pipeline",
+                "Subcategory": "Master File Pending",
+                "Metric": "Pending QC/BA Volume",
+                "Display Name": "Pending QC/BA Volume",
+                "Source": "Master File",
+                "Logic": "Received cases mapped to Pending QC/BA, aggregated by Original T0 and output period.",
                 "Cutoff": "BoW cutoff",
             },
             {
@@ -101,7 +112,7 @@ class DataProcessor:
                 "Metric": "Actual Start Volume",
                 "Display Name": "Actual Start Volume",
                 "Source": "Master File",
-                "Logic": "Cases with status in Completed, WBH, Cancelled, WIP aggregated by Original T0.",
+                "Logic": "Cases with status in Completed, WBH, Cancelled/Closed, WIP, Pending QC/BA aggregated by Original T0.",
                 "Cutoff": "Current date",
             },
             {
@@ -259,6 +270,7 @@ class DataProcessor:
         metrics = [
             "Planned Start Volume",
             "Received Start Volume",
+            "Pending QC/BA Volume",
             "Actual Completion Volume",
             "Forecast Completion Volume",
             "Demand FTE",
@@ -760,6 +772,40 @@ class DataProcessor:
         self.log_series_summary("WIP received start volume", self.open_received_start_volume)
         return self.open_received_start_volume
 
+    def calculate_pending_qc_ba_volume(self, cutoff_date=None):
+        if cutoff_date is None:
+            cutoff_date = self.infer_remaining_bow_cutoff_date()
+
+        if mh.OriginalT0 not in self.master_df.columns or mh.ReviewType not in self.master_df.columns or mh.TaskStatus not in self.master_df.columns:
+            self.pending_qc_ba_volume = pd.Series(
+                dtype=float,
+                index=pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Start Period"])
+            )
+            self.pending_qc_ba_volume.name = "Pending QC/BA Volume"
+            return self.pending_qc_ba_volume
+
+        pending_df = self.master_df[[mh.OriginalT0, mh.ReviewType, mh.TaskStatus]].copy()
+        pending_df[mh.OriginalT0] = pd.to_datetime(pending_df[mh.OriginalT0], errors="coerce").dt.normalize()
+        pending_df[mh.ReviewType] = pending_df[mh.ReviewType].apply(lambda x: "PR" if "PR" in str(x) else "Trigger")
+        pending_df["Status"] = pending_df[mh.TaskStatus].map(self.wbh_status)
+        pending_df = pending_df.dropna(subset=[mh.OriginalT0, "Status"])
+        pending_df = pending_df[pending_df[mh.OriginalT0] <= cutoff_date]
+        pending_df = pending_df[pending_df["Status"].isin(self.pending_qc_ba_status)]
+        pending_df["Start Period"] = pending_df[mh.OriginalT0].dt.to_period(self.frequency)
+
+        if pending_df.empty:
+            self.pending_qc_ba_volume = pd.Series(
+                dtype=float,
+                index=pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Start Period"])
+            )
+        else:
+            self.pending_qc_ba_volume = pending_df.groupby([mh.ReviewType, "Start Period"]).size().astype(float)
+            self.pending_qc_ba_volume.index = self.pending_qc_ba_volume.index.set_names(["Case Type", "Start Period"])
+
+        self.pending_qc_ba_volume.name = "Pending QC/BA Volume"
+        self.log_series_summary("Pending QC/BA volume", self.pending_qc_ba_volume)
+        return self.pending_qc_ba_volume
+
     def calculate_actual_completion_volume(self, cutoff_date=None):
         if cutoff_date is None:
             cutoff_date = self.infer_actual_cutoff_date()
@@ -1259,6 +1305,9 @@ class DataProcessor:
         open_received_start_volume = self.calculate_open_received_start_volume(
             cutoff_date=self.infer_remaining_bow_cutoff_date()
         )
+        pending_qc_ba_volume = self.calculate_pending_qc_ba_volume(
+            cutoff_date=self.infer_remaining_bow_cutoff_date()
+        )
         remaining_start_volume = self.calculate_remaining_bow_volume(cutoff_date=cutoff_date)
         actual_start_volume = self.calculate_actual_start_volume(cutoff_date=cutoff_date)
         completion_volume = self.calculate_completion_volume(cutoff_date=cutoff_date)
@@ -1283,6 +1332,10 @@ class DataProcessor:
             "WIP Received Start Volume": normalize_volume_series(
                 open_received_start_volume,
                 "WIP Received Start Volume"
+            ),
+            "Pending QC/BA Volume": normalize_volume_series(
+                pending_qc_ba_volume,
+                "Pending QC/BA Volume"
             ),
             "Remaining Planned Start Volume": normalize_volume_series(
                 remaining_start_volume,

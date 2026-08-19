@@ -20,6 +20,7 @@ class WorkloadHtmlVisualizer:
         "Planned Start Volume",
         "Received Start Volume",
         "WIP Received Start Volume",
+        "Pending QC/BA Volume",
         "Remaining Planned Start Volume",
         "Actual Start Volume",
         "Actual Completion Volume",
@@ -34,6 +35,7 @@ class WorkloadHtmlVisualizer:
     DEFAULT_METRICS = [
         "Planned Start Volume",
         "Received Start Volume",
+        "Pending QC/BA Volume",
         "Remaining Planned Start Volume",
         "Actual Completion Volume",
         "Forecast Completion Volume",
@@ -50,6 +52,7 @@ class WorkloadHtmlVisualizer:
         "02_Workload_Long",
         "12_Start_Reconciliation",
         "13_WIP_Received_Start",
+        "14_Pending_QC_BA",
         "20_Completion",
         "21_Completion_Distribution",
         "30_WBH_Letter",

@@ -444,6 +444,7 @@ class WorkloadExcelReporter:
                 },
                 {"Item": "BoW Input Frequency", "Value": processor.input_bow_volume_config["frequency"]},
                 {"Item": "WIP Received Status", "Value": ", ".join(sorted(processor.open_start_status))},
+                {"Item": "Pending QC/BA Status", "Value": ", ".join(sorted(processor.pending_qc_ba_status))},
                 {"Item": "Actual Start Status", "Value": ", ".join(sorted(processor.actual_start_status))},
                 {
                     "Item": "Actual Completion Status",
@@ -558,6 +559,11 @@ class WorkloadExcelReporter:
             "13_WIP_Received_Start": self.output_table_from_series(
                 processor.open_received_start_volume,
                 "WIP Received Start Volume",
+                period_columns=["Start Period"]
+            ),
+            "14_Pending_QC_BA": self.output_table_from_series(
+                processor.pending_qc_ba_volume,
+                "Pending QC/BA Volume",
                 period_columns=["Start Period"]
             ),
             "20_Completion": self.output_table_from_dataframe(
