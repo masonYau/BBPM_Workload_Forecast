@@ -1141,23 +1141,85 @@ class DataProcessor:
         )
         return self.completion_volume
 
-    def calculate_remaining_bow_volume(self, cutoff_date):
+    def calculate_remaining_bow_volume(self, cutoff_date=None):
         if self.input_bow_volume.empty:
             self.read_input_bow_volume()
-        if self.received_volume.empty:
-            self.calculate_received_volume(self.infer_actual_cutoff_date())
 
-        periods = self.bow_volume.index.union(self.received_volume.index).sort_values()
+        if cutoff_date is None:
+            cutoff_date = self.infer_actual_cutoff_date()
+        cutoff_date = pd.to_datetime(cutoff_date).normalize()
+        self.calculate_received_volume(cutoff_date=cutoff_date)
+
+        input_frequency = self.input_bow_volume_config["frequency"]
+        cutoff_input_period = cutoff_date.to_period(input_frequency)
+
+        if mh.OriginalT0 in self.master_df.columns and mh.ReviewType in self.master_df.columns:
+            received_df = self.master_df[[mh.OriginalT0, mh.ReviewType]].copy()
+            received_df[mh.ReviewType] = received_df[mh.ReviewType].apply(lambda x: "PR" if "PR" in str(x) else "Trigger")
+            received_df[mh.OriginalT0] = pd.to_datetime(received_df[mh.OriginalT0], errors="coerce").dt.normalize()
+            received_df = received_df.dropna(subset=[mh.OriginalT0])
+            received_df = received_df[received_df[mh.OriginalT0] <= cutoff_date]
+            received_df["Input Period"] = received_df[mh.OriginalT0].dt.to_period(input_frequency)
+            received_by_input_period = received_df.groupby([mh.ReviewType, "Input Period"]).size()
+            received_by_input_period.index = received_by_input_period.index.set_names(["Case Type", "Input Period"])
+        else:
+            received_by_input_period = pd.Series(dtype=int)
+
+        remaining_output_volume = {}
+
+        for (case_type, input_period), planned_volume in self.input_bow_volume.sort_index().items():
+            input_start_date = input_period.start_time.normalize()
+            input_end_date = (input_period + 1).start_time.normalize()
+
+            if input_end_date <= cutoff_date:
+                continue
+
+            allocation_start_date = max(input_start_date, cutoff_date)
+            allocation_volume = planned_volume
+
+            if input_period == cutoff_input_period:
+                received_volume = received_by_input_period.get((case_type, input_period), 0)
+                allocation_volume = max(planned_volume - received_volume, 0)
+
+            if allocation_volume <= 0 or allocation_start_date >= input_end_date:
+                continue
+
+            allocation_days = (input_end_date - allocation_start_date).days
+            first_output_period = allocation_start_date.to_period(self.frequency)
+            last_output_period = (input_end_date - pd.Timedelta(days=1)).to_period(self.frequency)
+
+            for output_period in pd.period_range(first_output_period, last_output_period, freq=self.frequency):
+                output_start_date = output_period.start_time.normalize()
+                output_end_date = (output_period + 1).start_time.normalize()
+                overlap_days = (
+                    min(input_end_date, output_end_date) - max(allocation_start_date, output_start_date)
+                ).days
+
+                if overlap_days > 0:
+                    remaining_output_volume[(case_type, output_period)] = (
+                        remaining_output_volume.get((case_type, output_period), 0)
+                        + allocation_volume * overlap_days / allocation_days
+                    )
+
+        if remaining_output_volume:
+            remaining_output_volume = pd.Series(remaining_output_volume, dtype=float).sort_index()
+            remaining_output_volume.index = pd.MultiIndex.from_tuples(
+                remaining_output_volume.index,
+                names=["Case Type", "Period"]
+            )
+        else:
+            remaining_output_volume = pd.Series(
+                dtype=float,
+                index=pd.MultiIndex.from_arrays([[], []], names=["Case Type", "Period"])
+            )
+        remaining_output_volume.name = "Remaining BoW Volume"
+
+        periods = self.bow_volume.index.union(self.received_volume.index).union(remaining_output_volume.index).sort_values()
         remaining_df = pd.DataFrame(index=periods)
         remaining_df.index = remaining_df.index.set_names(["Case Type", "Period"])
         remaining_df["Input BoW Volume"] = self.bow_volume.reindex(periods, fill_value=0)
         remaining_df["Received Volume"] = self.received_volume.reindex(periods, fill_value=0)
-        remaining_df["Remaining BoW Volume"] = (
-            remaining_df["Input BoW Volume"] - remaining_df["Received Volume"]
-        ).clip(lower=0)
-        cutoff_period = cutoff_date.to_period(self.frequency)
-        before_cutoff = remaining_df.index.get_level_values("Period") < cutoff_period
-        remaining_df.loc[before_cutoff, "Remaining BoW Volume"] = 0
+        remaining_df["Remaining BoW Volume"] = remaining_output_volume.reindex(periods, fill_value=0)
         remaining_df["Over Received Volume"] = (
             remaining_df["Received Volume"] - remaining_df["Input BoW Volume"]
         ).clip(lower=0)
