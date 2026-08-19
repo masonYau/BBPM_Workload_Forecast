@@ -56,6 +56,51 @@ class WorkloadExcelReporter:
         output_df = volume_df.reset_index()
         return self.add_period_display_columns(output_df, period_columns=period_columns)
 
+    def build_start_reconciliation_output_table(self, actual_cutoff_date, bow_cutoff_date):
+        output_df = self.output_table_from_dataframe(
+            self.processor.remaining_bow_volume,
+            period_columns=["Period"]
+        )
+        if output_df.empty:
+            return output_df
+
+        output_df = output_df.rename(
+            columns={
+                "Input BoW Volume": "Output Plan Volume",
+                "Received Volume": "Received Through BoW Cutoff",
+            }
+        )
+        output_df["Actual Cutoff Date"] = pd.to_datetime(actual_cutoff_date).normalize()
+        output_df["BoW Cutoff Date"] = pd.to_datetime(bow_cutoff_date).normalize()
+        output_df["Reconciliation Difference"] = (
+            output_df["Output Plan Volume"]
+            - output_df["Received Through BoW Cutoff"]
+            - output_df["Remaining BoW Volume"]
+            + output_df["Over Received Volume"]
+        )
+        output_df["Reconciliation Status"] = np.where(
+            output_df["Reconciliation Difference"].abs() < 0.000001,
+            "OK",
+            "CHECK",
+        )
+
+        return output_df[
+            [
+                "Case Type",
+                "Period",
+                "Period Start",
+                "Period End",
+                "Actual Cutoff Date",
+                "BoW Cutoff Date",
+                "Output Plan Volume",
+                "Received Through BoW Cutoff",
+                "Remaining BoW Volume",
+                "Over Received Volume",
+                "Reconciliation Difference",
+                "Reconciliation Status",
+            ]
+        ]
+
     def build_completion_distribution_output_table(self):
         processor = self.processor
         distribution_df = self.output_table_from_series(
@@ -366,6 +411,7 @@ class WorkloadExcelReporter:
         processor = self.processor
         if cutoff_date is None:
             cutoff_date = processor.infer_actual_cutoff_date()
+        actual_cutoff_date = pd.to_datetime(cutoff_date).normalize()
 
         logger.info(
             "Building Excel output tables | frequency=%s cutoff_date=%s write_excel=%s output_path=%s",
@@ -374,15 +420,20 @@ class WorkloadExcelReporter:
             write_excel,
             output_path or self.config["outputs"]["excel_path"],
         )
-        workload_df = processor.calculate_workload(cutoff_date=cutoff_date)
+        workload_df = processor.calculate_workload(cutoff_date=actual_cutoff_date)
+        bow_cutoff_date = processor.infer_remaining_bow_cutoff_date()
         metric_definitions = pd.DataFrame(processor.output_metric_definitions)
         metric_lookup = metric_definitions.set_index("Metric").to_dict("index")
 
         control_df = pd.DataFrame(
             [
                 {"Item": "Current Date", "Value": processor.get_current_cutoff_date()},
-                {"Item": "Actual Cutoff Date", "Value": processor.infer_actual_cutoff_date()},
-                {"Item": "Cutoff Date", "Value": processor.infer_remaining_bow_cutoff_date()},
+                {"Item": "Actual Cutoff Date", "Value": actual_cutoff_date},
+                {"Item": "BoW Cutoff Date", "Value": bow_cutoff_date},
+                {
+                    "Item": "BoW Cutoff Definition",
+                    "Value": "Later of current date and latest Original T0 in the Master File",
+                },
                 {"Item": "Output Frequency", "Value": processor.frequency},
                 {
                     "Item": "Completion Input Frequency",
@@ -400,6 +451,25 @@ class WorkloadExcelReporter:
                 {"Item": "Completion UPT", "Value": processor.completion_upt},
                 {"Item": "Init UPT", "Value": processor.init_upt},
                 {"Item": "Working Hour", "Value": processor.working_hour},
+                {
+                    "Item": "Remaining BoW Plan Rule",
+                    "Value": (
+                        "Monthly: input BoW. Weekly/daily: max(input BoW - received through "
+                        "actual cutoff at input frequency, 0). Allocate from actual cutoff "
+                        "across current and future output periods."
+                    ),
+                },
+                {
+                    "Item": "Remaining BoW Output Rule",
+                    "Value": "max(Output Plan Volume - Received Through BoW Cutoff, 0)",
+                },
+                {
+                    "Item": "Remaining BoW Reconciliation",
+                    "Value": (
+                        "Output Plan Volume - Received Through BoW Cutoff - Remaining BoW Volume "
+                        "+ Over Received Volume = 0"
+                    ),
+                },
                 {
                     "Item": "Demand FTE Formula",
                     "Value": "(Completion Volume * Completion UPT + Init Volume * Init UPT) / Working Hour",
@@ -478,9 +548,9 @@ class WorkloadExcelReporter:
                 "Planned Start Volume",
                 period_columns=["Period"]
             ),
-            "12_Start_Reconciliation": self.output_table_from_dataframe(
-                processor.remaining_bow_volume,
-                period_columns=["Period"]
+            "12_Start_Reconciliation": self.build_start_reconciliation_output_table(
+                actual_cutoff_date=actual_cutoff_date,
+                bow_cutoff_date=bow_cutoff_date,
             ),
             "13_WIP_Received_Start": self.output_table_from_series(
                 processor.open_received_start_volume,
@@ -546,6 +616,7 @@ class WorkloadExcelReporter:
             output_path,
             len(output_tables),
         )
+        from openpyxl.formatting.rule import FormulaRule
         from openpyxl.styles import Alignment, Font, PatternFill
         from openpyxl.utils import get_column_letter
 
@@ -572,6 +643,10 @@ class WorkloadExcelReporter:
                 )
 
         with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+            writer.book.calculation.calcMode = "auto"
+            writer.book.calculation.fullCalcOnLoad = True
+            writer.book.calculation.forceFullCalc = True
+
             for sheet_name, output_df in output_tables.items():
                 safe_sheet_name = sheet_name[:31]
                 if output_df is None or output_df.empty:
@@ -594,6 +669,43 @@ class WorkloadExcelReporter:
                     for cell in worksheet[1]
                     if cell.value is not None
                 }
+
+                if safe_sheet_name == "12_Start_Reconciliation" and worksheet.max_row >= 2:
+                    column_by_header = {
+                        header: column
+                        for column, header in header_by_column.items()
+                    }
+                    plan_letter = get_column_letter(column_by_header["Output Plan Volume"])
+                    received_letter = get_column_letter(column_by_header["Received Through BoW Cutoff"])
+                    remaining_letter = get_column_letter(column_by_header["Remaining BoW Volume"])
+                    over_received_letter = get_column_letter(column_by_header["Over Received Volume"])
+                    difference_letter = get_column_letter(column_by_header["Reconciliation Difference"])
+                    status_letter = get_column_letter(column_by_header["Reconciliation Status"])
+
+                    for row_number in range(2, worksheet.max_row + 1):
+                        worksheet[f"{difference_letter}{row_number}"] = (
+                            f"={plan_letter}{row_number}-{received_letter}{row_number}"
+                            f"-{remaining_letter}{row_number}+{over_received_letter}{row_number}"
+                        )
+                        worksheet[f"{status_letter}{row_number}"] = (
+                            f'=IF(ABS({difference_letter}{row_number})<0.000001,"OK","CHECK")'
+                        )
+
+                    status_range = f"{status_letter}2:{status_letter}{worksheet.max_row}"
+                    worksheet.conditional_formatting.add(
+                        status_range,
+                        FormulaRule(
+                            formula=[f'${status_letter}2="OK"'],
+                            fill=PatternFill("solid", fgColor="E2F0D9"),
+                        )
+                    )
+                    worksheet.conditional_formatting.add(
+                        status_range,
+                        FormulaRule(
+                            formula=[f'${status_letter}2="CHECK"'],
+                            fill=PatternFill("solid", fgColor="F4CCCC"),
+                        )
+                    )
 
                 for row in worksheet.iter_rows(min_row=2):
                     category_value = None
@@ -628,6 +740,14 @@ class WorkloadExcelReporter:
                         elif isinstance(cell.value, (int, float)):
                             cell.number_format = "#,##0.0"
 
+                        if (
+                            safe_sheet_name == "00_Control" and header == "Value"
+                        ) or (
+                            safe_sheet_name == "03_Metric_Definitions"
+                            and header in {"Source", "Logic", "Cutoff"}
+                        ):
+                            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
                 for column_cells in worksheet.columns:
                     column_letter = get_column_letter(column_cells[0].column)
                     max_length = 0
@@ -637,6 +757,44 @@ class WorkloadExcelReporter:
                         max_length = max(max_length, len(str(cell.value)))
 
                     worksheet.column_dimensions[column_letter].width = min(max(max_length + 2, 12), 45)
+
+                if safe_sheet_name == "00_Control":
+                    worksheet.column_dimensions["A"].width = 34
+                    worksheet.column_dimensions["B"].width = 80
+                    for row_number in range(2, worksheet.max_row + 1):
+                        if len(str(worksheet[f"B{row_number}"].value or "")) > 70:
+                            worksheet.row_dimensions[row_number].height = 42
+                elif safe_sheet_name == "03_Metric_Definitions":
+                    definition_widths = {
+                        "A": 16,
+                        "B": 20,
+                        "C": 30,
+                        "D": 30,
+                        "E": 42,
+                        "F": 85,
+                        "G": 52,
+                    }
+                    for column_letter, width in definition_widths.items():
+                        worksheet.column_dimensions[column_letter].width = width
+                    for row_number in range(2, worksheet.max_row + 1):
+                        worksheet.row_dimensions[row_number].height = 45
+                elif safe_sheet_name == "12_Start_Reconciliation":
+                    reconciliation_widths = {
+                        "A": 14,
+                        "B": 14,
+                        "C": 14,
+                        "D": 14,
+                        "E": 18,
+                        "F": 18,
+                        "G": 20,
+                        "H": 30,
+                        "I": 22,
+                        "J": 22,
+                        "K": 26,
+                        "L": 22,
+                    }
+                    for column_letter, width in reconciliation_widths.items():
+                        worksheet.column_dimensions[column_letter].width = width
 
         self.output_excel_path = output_path
         setattr(self.processor, "output_excel_path", output_path)

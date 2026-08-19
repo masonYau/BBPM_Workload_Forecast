@@ -67,8 +67,8 @@ class DataProcessor:
                 "Metric": "Received Start Volume",
                 "Display Name": "Received Start Volume",
                 "Source": "Master File",
-                "Logic": "All received cases aggregated by Original T0 and output period.",
-                "Cutoff": "Current date",
+                "Logic": "All received cases through the BoW cutoff aggregated by Original T0 and output period.",
+                "Cutoff": "BoW cutoff",
             },
             {
                 "Category": "Start Pipeline",
@@ -77,7 +77,7 @@ class DataProcessor:
                 "Display Name": "WIP Received Start Volume",
                 "Source": "Master File",
                 "Logic": "Received cases still WIP after excluding completed and cancelled status.",
-                "Cutoff": "Master File latest Original T0",
+                "Cutoff": "BoW cutoff",
             },
             {
                 "Category": "Start Pipeline",
@@ -85,8 +85,12 @@ class DataProcessor:
                 "Metric": "Remaining Planned Start Volume",
                 "Display Name": "Remaining Planned Start Volume",
                 "Source": "Input_BoW_Volume.xlsx + Master File",
-                "Logic": "Input period plan minus received starts, then allocated to output periods after Master File cutoff.",
-                "Cutoff": "Master File latest Original T0",
+                "Logic": (
+                    "Monthly: allocate input BoW from the actual cutoff. Weekly/daily: allocate "
+                    "max(input BoW - received through actual cutoff at input frequency, 0). "
+                    "Remaining per output period is max(output plan - received through BoW cutoff, 0)."
+                ),
+                "Cutoff": "Actual cutoff for plan basis/allocation; BoW cutoff for output-period received volume.",
             },
             {
                 "Category": "Start Pipeline",
@@ -113,7 +117,7 @@ class DataProcessor:
                 "Display Name": "Forecast Completion Volume",
                 "Source": "WIP received starts + remaining planned starts + completion distribution",
                 "Logic": "WIP received and remaining planned starts multiplied by case-type completion probability distribution.",
-                "Cutoff": "Mixed: Master File cutoff for WIP received, current date for actual completion.",
+                "Cutoff": "BoW cutoff for WIP received; remaining plan follows actual/BoW cutoff rules.",
             },
             {
                 "Category": "Demand",
@@ -129,9 +133,9 @@ class DataProcessor:
                 "Subcategory": "Input Volume",
                 "Metric": "Init Volume",
                 "Display Name": "Init Volume",
-                "Source": "Actual start + remaining planned start",
-                "Logic": "Actual Start Volume plus Remaining Planned Start Volume.",
-                "Cutoff": "Current date for actual start; Master File latest Original T0 for remaining planned start.",
+                "Source": "Received start + remaining planned start",
+                "Logic": "Received Start Volume plus Remaining Planned Start Volume.",
+                "Cutoff": "BoW cutoff for received starts; remaining plan follows actual/BoW cutoff rules.",
             },
             {
                 "Category": "Demand",
@@ -149,7 +153,7 @@ class DataProcessor:
                 "Display Name": "Forecast WBH Letter Volume",
                 "Source": "WIP received starts + remaining planned starts + completion distribution",
                 "Logic": "Starts still uncompleted at T+90 for PR or T+60 for Trigger.",
-                "Cutoff": "Master File latest Original T0 for WIP received.",
+                "Cutoff": "BoW cutoff for WIP received; remaining plan follows actual/BoW cutoff rules.",
             },
             {
                 "Category": "WBH Action",
@@ -158,7 +162,7 @@ class DataProcessor:
                 "Display Name": "Forecast WBH Call Volume",
                 "Source": "WIP received starts + remaining planned starts + completion distribution",
                 "Logic": "Starts still uncompleted at T+95 for PR or T+65 for Trigger.",
-                "Cutoff": "Master File latest Original T0 for WIP received.",
+                "Cutoff": "BoW cutoff for WIP received; remaining plan follows actual/BoW cutoff rules.",
             },
         ]
 
