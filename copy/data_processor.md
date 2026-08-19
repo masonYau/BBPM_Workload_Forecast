@@ -1141,12 +1141,11 @@ class DataProcessor:
         )
         return self.completion_volume
 
-    def calculate_remaining_bow_volume(self):
+    def calculate_remaining_bow_volume(self, cutoff_date):
         if self.input_bow_volume.empty:
             self.read_input_bow_volume()
-
-        actual_cutoff_date = self.infer_actual_cutoff_date()
-        self.calculate_received_volume(cutoff_date=actual_cutoff_date)
+        if self.received_volume.empty:
+            self.calculate_received_volume(self.infer_actual_cutoff_date())
 
         periods = self.bow_volume.index.union(self.received_volume.index).sort_values()
         remaining_df = pd.DataFrame(index=periods)
@@ -1156,7 +1155,7 @@ class DataProcessor:
         remaining_df["Remaining BoW Volume"] = (
             remaining_df["Input BoW Volume"] - remaining_df["Received Volume"]
         ).clip(lower=0)
-        cutoff_period = actual_cutoff_date.to_period(self.frequency)
+        cutoff_period = cutoff_date.to_period(self.frequency)
         before_cutoff = remaining_df.index.get_level_values("Period") < cutoff_period
         remaining_df.loc[before_cutoff, "Remaining BoW Volume"] = 0
         remaining_df["Over Received Volume"] = (
@@ -1173,18 +1172,12 @@ class DataProcessor:
             float(pd.to_numeric(self.remaining_bow_volume["Remaining BoW Volume"], errors="coerce").fillna(0).sum()),
             float(pd.to_numeric(self.remaining_bow_volume["Over Received Volume"], errors="coerce").fillna(0).sum()),
         )
-        return self.remaining_bow_volume
+        return self.remaining_bow_volume["Remaining BoW Volume"]
 
 
     def calculate_workload(self, cutoff_date=None):
         if cutoff_date is None:
             cutoff_date = self.infer_actual_cutoff_date()
-
-        if self.bow_volume.empty:
-            self.read_input_bow_volume()
-
-        if self.remaining_bow_volume.empty:
-            self.calculate_remaining_bow_volume()
 
         received_start_volume = self.calculate_received_volume(
             cutoff_date=self.infer_remaining_bow_cutoff_date()
@@ -1192,6 +1185,7 @@ class DataProcessor:
         open_received_start_volume = self.calculate_open_received_start_volume(
             cutoff_date=self.infer_remaining_bow_cutoff_date()
         )
+        remaining_start_volume = self.calculate_remaining_bow_volume(cutoff_date=cutoff_date)
         actual_start_volume = self.calculate_actual_start_volume(cutoff_date=cutoff_date)
         completion_volume = self.calculate_completion_volume(cutoff_date=cutoff_date)
         wbh_letter_volume = self.calculate_wbh_letter_volume(cutoff_date=cutoff_date)
@@ -1208,10 +1202,6 @@ class DataProcessor:
             volume_series = pd.to_numeric(volume_series, errors="coerce").fillna(0).astype(float)
             volume_series.name = name
             return volume_series
-
-        remaining_start_volume = pd.Series(dtype=float, index=empty_index)
-        if not self.remaining_bow_volume.empty:
-            remaining_start_volume = self.remaining_bow_volume["Remaining BoW Volume"]
 
         workload_series = {
             "Planned Start Volume": normalize_volume_series(self.bow_volume, "Planned Start Volume"),
@@ -1283,11 +1273,6 @@ class DataProcessor:
         else:
             self.calculate_completion_distribution()
         self.read_input_bow_volume()
-        self.calculate_remaining_bow_volume()
-        self.calculate_actual_start_volume()
-        self.calculate_completion_volume()
-        self.calculate_wbh_letter_volume()
-        self.calculate_wbh_call_volume()
         self.calculate_workload()
         logger.info(
             "Data processor run complete | frequency=%s elapsed_sec=%.2f",
