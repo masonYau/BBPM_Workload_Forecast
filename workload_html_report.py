@@ -5,8 +5,12 @@ import os
 import numpy as np
 import pandas as pd
 
-from config_loader import load_config
-from workload_excel_report import WorkloadExcelReporter
+try:
+    from .config_loader import load_config
+    from .workload_excel_report import WorkloadExcelReporter
+except ImportError:
+    from config_loader import load_config
+    from workload_excel_report import WorkloadExcelReporter
 
 logger = logging.getLogger(__name__)
 
