@@ -82,7 +82,7 @@ Case tracker input. It is used to calculate received starts, actual starts, actu
 
 | Parameter / 参数 | Current value / 当前值 | Function and impact / 作用和影响 |
 | --- | --- | --- |
-| `inputs.tracker.file_path` | `BBPM Case tracker*.xlsm` | Tracker workbook path or wildcard pattern. If multiple files match, the latest modified file is selected. / Tracker 工作簿路径或通配符。如匹配多个文件，会选择最后修改时间最新的文件。 |
+| `inputs.tracker.file_path` | `BBPM Case tracker(Updated) - *.xlsm` | Tracker workbook path or wildcard pattern. If multiple files match, the latest modified file is selected. / Tracker 工作簿路径或通配符。如匹配多个文件，会选择最后修改时间最新的文件。 |
 | `inputs.tracker.sheet_name` | `Master File` | Sheet read from the tracker workbook. It must contain the required columns such as `CIN`, `Original T0`, `Review Type`, `Task Status`, and `Approval/Cancel Date`. / Tracker 中读取的 sheet。必须包含 `CIN`、`Original T0`、`Review Type`、`Task Status`、`Approval/Cancel Date` 等关键列。 |
 | `inputs.tracker.skiprows` | `1` | Number of rows skipped before reading headers. Changing it changes which row pandas treats as the header row. / 读取表头前跳过的行数。修改后会影响哪一行被识别为列名。 |
 
@@ -97,7 +97,7 @@ Run-level parameters control output frequency selection and frequency conversion
 | Parameter / 参数 | Current value / 当前值 | Function and impact / 作用和影响 |
 | --- | --- | --- |
 | `run.default_forecast_frequency` | `M` | Default frequency for the Excel report and the first processor built by `main.py`. Values should exist in `run.frequency_days`. / Excel 报表默认输出颗粒度，也是 `main.py` 首先构建的处理器颗粒度。取值应存在于 `run.frequency_days`。 |
-| `run.visualization_frequencies` | `["M", "W", "D"]` | Compatibility field. The current default HTML generation ignores this list and includes all frequencies defined in `run.frequency_days`. If calling `run_workload_visualization(..., frequencies=...)` directly, that explicit function argument still controls HTML frequencies. / 兼容字段。当前默认 HTML 生成会忽略该列表，并包含 `run.frequency_days` 中定义的全部颗粒度。如果直接调用 `run_workload_visualization(..., frequencies=...)`，显式传入的函数参数仍会控制 HTML 颗粒度。 |
+| `run.visualization_frequencies` | `["M", "W", "D"]` | Compatibility field. The current default HTML generation ignores this list and includes all frequencies defined in `run.frequency_days`, ordered as `M`, `W`, `D` when present and then any extra configured keys. If calling `run_workload_visualization(..., frequencies=...)` directly, that explicit function argument still controls HTML frequencies. / 兼容字段。当前默认 HTML 生成会忽略该列表，并包含 `run.frequency_days` 中定义的全部颗粒度；如存在 `M`、`W`、`D` 会按该顺序展示，之后追加其他配置频率。如果直接调用 `run_workload_visualization(..., frequencies=...)`，显式传入的函数参数仍会控制 HTML 颗粒度。 |
 | `run.frequency_days` | `{"D": 1, "W": 7, "M": 30}` | Conversion table from frequency code to approximate day count. It drives completion-distribution conversion, WBH timing conversion, and the list of default HTML frequencies. Changing values changes timing allocation and may materially change forecast results. / 频率代码到近似天数的换算表。它影响完成概率转换、WBH 时间点转换，也决定默认 HTML 包含哪些颗粒度。修改数值会改变时间分摊，可能显著影响预测结果。 |
 
 Frequency code details / 频率代码说明：
@@ -119,27 +119,39 @@ Tracker 中的原始状态会先通过 `business_rules.status_mapping` 标准化
 | Parameter / 参数 | Current value / 当前值 | Function and impact / 作用和影响 |
 | --- | --- | --- |
 | `business_rules.completed_source_statuses` | `["E2E Completed", "ReCompleted - WBH"]` | Legacy/reserved parameter. It is loaded into the processor, but current calculations use `status_mapping` plus `actual_completion_statuses` for completion logic. / 历史兼容/预留参数。当前会被读取到处理器中，但实际完成逻辑使用 `status_mapping` 和 `actual_completion_statuses`。 |
-| `business_rules.status_mapping` | See table below. / 见下表。 | Maps raw tracker statuses to normalized statuses: `Completed`, `WBH`, `Cancelled`, `WIP`, or `Not Initiated`. Unknown statuses become missing and are excluded from status-dependent calculations. / 将 Tracker 原始状态映射为标准状态：`Completed`、`WBH`、`Cancelled`、`WIP` 或 `Not Initiated`。未知状态会变为空值，并在依赖状态的计算中被排除。 |
-| `business_rules.actual_start_statuses` | `["Completed", "WBH", "Cancelled", "WIP"]` | Normalized statuses counted as actual starts. Adding a status increases actual start volume; removing one reduces it. / 会被计入实际开始量的标准状态。增加状态会提高实际开始量，移除状态会降低实际开始量。 |
-| `business_rules.open_start_statuses` | `["WBH", "WIP", "Not Initiated"]` | Normalized statuses treated as open/WIP received starts. These feed forecast completion and WBH action calculations. / 被视为开放中/WIP 已收到开始量的标准状态。这些量会进入预测完成和 WBH 动作预测。 |
+| `business_rules.status_mapping` | See table below. / 见下表。 | Maps raw tracker statuses to normalized statuses: `Completed`, `WBH`, `Cancelled/Closed`, `WIP`, `Pending QC/BA`, or `Not Initiated`. Unknown statuses become missing and are excluded from status-dependent calculations. / 将 Tracker 原始状态映射为标准状态：`Completed`、`WBH`、`Cancelled/Closed`、`WIP`、`Pending QC/BA` 或 `Not Initiated`。未知状态会变为空值，并在依赖状态的计算中被排除。 |
+| `business_rules.actual_start_statuses` | `["Completed", "WBH", "Cancelled/Closed", "WIP", "Pending QC/BA"]` | Normalized statuses counted as actual starts. Adding a status increases actual start volume; removing one reduces it. / 会被计入实际开始量的标准状态。增加状态会提高实际开始量，移除状态会降低实际开始量。 |
+| `business_rules.open_start_statuses` | `["WBH", "WIP", "Not Initiated", "Pending QC/BA"]` | Normalized statuses treated as open/WIP received starts. These feed forecast completion and WBH action calculations. / 被视为开放中/WIP 已收到开始量的标准状态。这些量会进入预测完成和 WBH 动作预测。 |
+| `business_rules.pending_qc_ba_statuses` | `["Pending QC/BA"]` | Normalized statuses counted in the standalone `Pending QC/BA Volume` metric. / 会单独计入 `Pending QC/BA Volume` 指标的标准状态。 |
 | `business_rules.actual_completion_statuses` | `["Completed"]` | Normalized statuses counted as actual completions using `Approval/Cancel Date`. Adding statuses increases actual completion volume. / 会按 `Approval/Cancel Date` 计入实际完成量的标准状态。增加状态会提高实际完成量。 |
 
 Current `status_mapping` entries / 当前 `status_mapping` 明细：
 
 | Raw tracker status / Tracker 原始状态 | Normalized status / 标准状态 | Impact / 影响 |
 | --- | --- | --- |
+| `CSEM` | `Completed` | Counted as actual start and actual completion. / 计入实际开始和实际完成。 |
+| `Cancelled - 2nd AC Opening under NTB` | `Cancelled/Closed` | Counted as actual start, not actual completion. / 计入实际开始，不计入实际完成。 |
+| `Cancelled - AC re-opened under NTB` | `Cancelled/Closed` | Counted as actual start, not actual completion. / 计入实际开始，不计入实际完成。 |
+| `Cancelled - All AC Closed` | `Completed` | Counted as actual start and actual completion. / 计入实际开始和实际完成。 |
+| `Cancelled - CDAB Code` | `Cancelled/Closed` | Counted as actual start, not actual completion. / 计入实际开始，不计入实际完成。 |
+| `Cancelled - China Notch-Down` | `Cancelled/Closed` | Counted as actual start, not actual completion. / 计入实际开始，不计入实际完成。 |
+| `Cancelled - KPMG Managed` | `Cancelled/Closed` | Counted as actual start, not actual completion. / 计入实际开始，不计入实际完成。 |
+| `Cancelled - RM Managed` | `Cancelled/Closed` | Counted as actual start, not actual completion. / 计入实际开始，不计入实际完成。 |
+| `Cancelled - trigger reason can be discounted` | `Cancelled/Closed` | Counted as actual start, not actual completion. / 计入实际开始，不计入实际完成。 |
+| `Cat C CSEM - CDD deficiencies (Geographical risk)` | `Completed` | Counted as actual start and actual completion. / 计入实际开始和实际完成。 |
+| `Cat C CSEM - CDD deficienes (Geographical risk)` | `Completed` | Counted as actual start and actual completion. / 计入实际开始和实际完成。 |
+| `Cat C CSEM - Tax Risk Appetite` | `Completed` | Counted as actual start and actual completion. / 计入实际开始和实际完成。 |
+| `COMPLETED` | `WIP` | Currently treated as WIP, so it is counted as actual start and WIP received start. / 当前按 WIP 处理，因此计入实际开始和 WIP 已收到开始。 |
 | `E2E Completed` | `Completed` | Counted as actual start and actual completion. / 计入实际开始和实际完成。 |
-| `WBH Imposed` | `WBH` | Counted as actual start and open/WIP received start. / 计入实际开始和开放中/WIP 已收到开始。 |
+| `FAILED` | `WIP` | Counted as actual start and WIP received start. / 计入实际开始和 WIP 已收到开始。 |
+| `IN_PROGRESS` | `WIP` | Counted as actual start and WIP received start. / 计入实际开始和 WIP 已收到开始。 |
+| `Not Loading` | `Not Initiated` | Counted as WIP received start, not actual start. / 计入 WIP 已收到开始，不计入实际开始。 |
+| `Pending BA Approval` | `Pending QC/BA` | Counted as actual start, WIP received start, and `Pending QC/BA Volume`. / 计入实际开始、WIP 已收到开始和 `Pending QC/BA Volume`。 |
+| `Pending Data Capture` | `WIP` | Counted as actual start and WIP received start. / 计入实际开始和 WIP 已收到开始。 |
+| `Pending QC` | `Pending QC/BA` | Counted as actual start, WIP received start, and `Pending QC/BA Volume`. / 计入实际开始、WIP 已收到开始和 `Pending QC/BA Volume`。 |
+| `WBH Imposed` | `WBH` | Counted as actual start and WIP received start. / 计入实际开始和 WIP 已收到开始。 |
 | `ReCompleted - WBH` | `Completed` | Counted as actual start and actual completion. / 计入实际开始和实际完成。 |
-| `Cancelled - All AC Closed` | `Completed` | Treated as completed in current logic. / 当前逻辑中按已完成处理。 |
-| `CSEM` | `Completed` | Treated as completed in current logic. / 当前逻辑中按已完成处理。 |
-| `Cancelled - KPMG Managed` | `Cancelled` | Counted as actual start, not actual completion. / 计入实际开始，不计入实际完成。 |
-| `Cancelled - RM Managed` | `Cancelled` | Counted as actual start, not actual completion. / 计入实际开始，不计入实际完成。 |
-| `IN_PROGRESS` | `WIP` | Counted as actual start and open/WIP received start. / 计入实际开始和开放中/WIP 已收到开始。 |
-| `Cancelled - 2nd AC Opening under NTB` | `Cancelled` | Counted as actual start, not actual completion. / 计入实际开始，不计入实际完成。 |
-| `Cancelled - AC re-opened under NTB` | `Cancelled` | Counted as actual start, not actual completion. / 计入实际开始，不计入实际完成。 |
-| `Pending BA Approval` | `WIP` | Counted as actual start and open/WIP received start. / 计入实际开始和开放中/WIP 已收到开始。 |
-| `Not Loading` | `Not Initiated` | Counted as open/WIP received start, not actual start. / 计入开放中/WIP 已收到开始，不计入实际开始。 |
+| `Completed - WBH with KYCH over 30 days` | `Completed` | Counted as actual start and actual completion. / 计入实际开始和实际完成。 |
 
 ### WBH action parameters / WBH 动作参数
 
@@ -170,6 +182,21 @@ These parameters set the day thresholds for forecasting WBH letter and call work
 | `outputs.excel_path` | `data/Workload_Forecast_Output.xlsx` | Default Excel output path. If the file is locked, the program writes a timestamped fallback file. / 默认 Excel 输出路径。如果文件被占用，程序会写出带时间戳的备用文件。 |
 | `outputs.html_path` | `data/Workload_Forecast_Visualization.html` | Default HTML visualization output path. If the file is locked, the program writes a timestamped fallback file. / 默认 HTML 可视化输出路径。如果文件被占用，程序会写出带时间戳的备用文件。 |
 | `outputs.log_path` | `./mi.log` | Log output path. It controls the file log location; the same log messages are also printed to the terminal. Relative paths are resolved from the current working directory. / 日志输出路径。它控制文件日志位置；同一批日志也会打印到终端。相对路径按当前运行目录解析。 |
+
+## Report Contents / 报表内容
+
+The Excel output writes a control sheet, wide and long workload tables, metric definitions, source/plan tables, start reconciliation, WIP and Pending QC/BA detail, completion detail, WBH action detail, and monthly calculation audit sheets.
+
+Excel 输出会写入控制页、宽表和长表工作量、指标定义、源数据/计划表、开始量对账、WIP 与 Pending QC/BA 明细、完成量明细、WBH 动作明细，以及月度计算审计页。
+
+| Output area / 输出区域 | Main sheets or views / 主要 sheet 或视图 |
+| --- | --- |
+| Control and definitions / 控制和定义 | `00_Control`, `03_Metric_Definitions` |
+| Workload tables / 工作量表 | `01_Workload_Wide`, `02_Workload_Long` |
+| Start pipeline / 开始量链路 | `10_Input_BoW`, `11_Planned_Start`, `12_Start_Reconciliation`, `13_WIP_Received_Start`, `14_Pending_QC_BA` |
+| Completion and WBH / 完成量和 WBH | `20_Completion`, `21_Completion_Distribution`, `30_WBH_Letter`, `31_WBH_Call` |
+| Monthly calculation audit / 月度计算审计 | `40_Calc_Forecast_Completion`, `41_Calc_WBH_Letter`, `42_Calc_WBH_Call`, `43_Calc_Demand_FTE` |
+| HTML visualization / HTML 可视化 | Frequency switcher, metric filters, case-type filters, summary cards, trend chart, metric matrix, and searchable detail tables. / 频率切换、指标筛选、案件类型筛选、汇总卡片、趋势图、指标矩阵和可搜索明细表。 |
 
 ## Python Entry Parameters / Python 入口函数参数
 
@@ -207,10 +234,14 @@ Run `copy_py_to_md.py` before committing. It exports both Python and JSON source
 | --- | --- |
 | `Planned Start Volume` | `inputs.bow_volume.*`, `run.frequency_days` |
 | `Received Start Volume` | `inputs.tracker.*`, `Original T0`, cutoff date |
-| `Remaining Planned Start Volume` | `inputs.bow_volume.*`, tracker received starts, cutoff date |
+| `WIP Received Start Volume` | `inputs.tracker.*`, `business_rules.status_mapping`, `business_rules.open_start_statuses`, BoW cutoff date |
+| `Pending QC/BA Volume` | `inputs.tracker.*`, `business_rules.status_mapping`, `business_rules.pending_qc_ba_statuses`, BoW cutoff date |
+| `Remaining Planned Start Volume` | `inputs.bow_volume.*`, tracker received starts, actual cutoff date, BoW cutoff date |
 | `Actual Start Volume` | `inputs.tracker.*`, `business_rules.status_mapping`, `business_rules.actual_start_statuses` |
 | `Actual Completion Volume` | `inputs.tracker.*`, `business_rules.status_mapping`, `business_rules.actual_completion_statuses` |
 | `Forecast Completion Volume` | `business_rules.read_completion_percentage_from_input`, `inputs.completion_percentage.*`, remaining/WIP starts |
+| `Completion Volume` | actual completion volume plus forecast completion volume |
+| `Init Volume` | received start volume plus remaining planned start volume |
 | `Forecast WBH Letter Volume` | `business_rules.wbh_letter_days.*`, completion probability, remaining/WIP starts |
 | `Forecast WBH Call Volume` | `business_rules.wbh_call_days.*`, completion probability, remaining/WIP starts |
 | `Demand FTE` | `business_rules.completion_upt`, `business_rules.init_upt`, `business_rules.working_hour`, completion/init volumes |
