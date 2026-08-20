@@ -239,6 +239,7 @@ def main(config_path=None):
         html_visualizer.output_path,
         time.perf_counter() - start_time,
     )
+    return default_processor
 
 
 def parse_args():
@@ -259,5 +260,5 @@ def parse_args():
 
 
 if __name__ == "__main__":
-    main(config_path=parse_args())
+    self = main(config_path=parse_args())
 ```
