@@ -2,15 +2,22 @@
 
 ```python
 import pandas as pd
-from headers import MasterHeader as mh
-from headers import BowHeader as bh
-from headers import RamHeader as rh
+
 import logging
 import numpy as np
 import math
 import os
 import time
-from config_loader import load_config
+try:
+    from .headers import MasterHeader as mh
+    from .headers import BowHeader as bh
+    from .headers import RamHeader as rh
+    from .config_loader import load_config
+except ImportError:
+    from headers import MasterHeader as mh
+    from headers import BowHeader as bh
+    from headers import RamHeader as rh
+    from config_loader import load_config
 
 logger = logging.getLogger(__name__)
 

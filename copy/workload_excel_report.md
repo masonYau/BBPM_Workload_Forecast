@@ -6,7 +6,11 @@ import logging
 
 import numpy as np
 import pandas as pd
-from config_loader import load_config
+
+try:
+    from .config_loader import load_config
+except ImportError:
+    from config_loader import load_config
 
 logger = logging.getLogger(__name__)
 

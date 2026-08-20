@@ -9,11 +9,16 @@ import sys
 import time
 
 import pandas as pd
-
-from config_loader import load_config
-from data_processor import DataProcessor
-from workload_html_report import WorkloadHtmlVisualizer
-from workload_excel_report import WorkloadExcelReporter
+try:
+    from .config_loader import load_config
+    from .data_processor import DataProcessor
+    from .workload_html_report import WorkloadHtmlVisualizer
+    from .workload_excel_report import WorkloadExcelReporter
+except ImportError:
+    from config_loader import load_config
+    from data_processor import DataProcessor
+    from workload_html_report import WorkloadHtmlVisualizer
+    from workload_excel_report import WorkloadExcelReporter
 
 
 HTML_FREQUENCY_ORDER = ("M", "W", "D")
@@ -107,7 +112,7 @@ def build_workload_processor(current_date, frequency, config=None):
         processor.run()
     except Exception:
         logger.error("Processor failed | frequency=%s", frequency, exc_info=True)
-        raise
+        return processor
 
     period_count = 0
     case_type_count = 0
@@ -213,7 +218,7 @@ def main(config_path=None):
         ",".join(html_frequencies),
         log_path,
     )
-
+    default_processor = None
     try:
         default_processor = build_workload_processor(run_date, default_frequency, config=config)
 
@@ -230,8 +235,8 @@ def main(config_path=None):
         html_visualizer.write_html()
         print(f"Output HTML written to: {html_visualizer.output_path}")
     except Exception:
-        logger.exception("Workload forecast main failed")
-        raise
+        logger.error("Workload forecast main failed", exc_info=True)
+        return default_processor
 
     logger.info(
         "Workload forecast main complete | excel_path=%s html_path=%s elapsed_sec=%.2f",

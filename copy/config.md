@@ -18,7 +18,7 @@
       "frequency": "M"
     },
     "tracker": {
-      "file_path": "BBPM Case tracker*.xlsm",
+      "file_path": "BBPM Case tracker(Updated) - *.xlsm",
       "sheet_name": "Master File",
       "skiprows": 1
     }
